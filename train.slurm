@@ -67,7 +67,7 @@ export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 #- storage path
-export STORAGE_PATH=/nfs_global/S/fangzixiang/train_model/R-zero/test
+export STORAGE_PATH=/nfs_global/S/fangzixiang/train_model/R-zero/test2
 #  建立存储文件
 mkdir -p \
   "$STORAGE_PATH/evaluation" \

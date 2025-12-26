@@ -8,8 +8,10 @@ echo "start train solver $experiment_name $solver_model_path $questioner_model_p
 
 export VLLM_DISABLE_COMPILE_CACHE=1
 
+
+
 echo 'start generate question'
-bash question_generate/question_generate.bash $questioner_model_path 10 $experiment_name 
+bash question_generate/question_generate.bash $questioner_model_path 70 $experiment_name 
 echo 'start evaluate generated question'
 bash question_evaluate/evaluate.sh $solver_model_path $experiment_name
 echo 'start save dataset to local'

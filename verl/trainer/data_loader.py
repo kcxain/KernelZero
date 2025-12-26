@@ -46,6 +46,14 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
     else:
         sampler = SequentialSampler(data_source=train_dataset)
 
+    # If dataset is smaller than batch_size, we cannot drop the last batch
+    # Otherwise, drop_last=True would result in an empty dataloader
+    dataset_size = len(train_dataset)
+    drop_last = dataset_size >= config.rollout_batch_size
+    if not drop_last:
+        print(f"Warning: Dataset size ({dataset_size}) is smaller than batch_size ({config.rollout_batch_size}). "
+              f"Setting drop_last=False to avoid empty dataloader.")
+    
     train_dataloader = StatefulDataLoader(
         dataset=train_dataset,
         batch_size=config.rollout_batch_size,
@@ -53,7 +61,7 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         num_workers=8,
         collate_fn=collate_fn,
         pin_memory=True,  # Enable pin_memory for faster GPU transfer
-        drop_last=True,
+        drop_last=drop_last,
         persistent_workers=True,  # Keep workers alive between epochs
     )
 
