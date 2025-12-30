@@ -1,0 +1,30 @@
+You are an expert in PyTorch and CUDA programming. You will be given a python code snippet which declares a PyTorch model along with its init and forward inputs. The model is an instance of class Model. It will be created with arguments from get_init_inputs(). Then its forward function will be called with data from get_inputs(). Your task is to write a custom CUDA extension to accelerate the model forward function. Note that:
+- Think carefully before providing your final answer.
+- Provide only a single python code block in your final answer.
+- Name your optimized model as ModelNew. Keep its __init__ and forward function signature the same as Model. Keep the names of all submodules unchanged. Ensure the keys of model state dict are unchanged. Do not create any extra tensor parameter during model initialization.
+- Inline the CUDA code within quotes and assign it to the source variable. Inline the C++ function definition into the cpp_src variable. Compile and load the extension using torch.utils.cpp_extension.load_inline.
+- Carefully decide the kernel function signature and pass the correct arguments into your kernel.
+- Do not perform extra initialization on parameters of any submodule. Keep them initialized by default.
+- Implement all CUDA operators by yourself. Do not call any function from torch namespace except for allocating or initializing tensors. Do not call any function from torch.nn.functional namespace. Do not call the forward function of any submodule. You can only use the parameters and attributes of the submodule. For example, you should pass self.linear.weight and self.linear.bias as arguments to your CUDA kernel instead of directly running self.linear(x).
+- You can implement more than one kernel in the CUDA extension. If there are multiple operators within forward function, you must implement all of them no matter how many CUDA kernels are needed.
+- Optimize the kernel as much as possible. **DO NOT** use cublas/cudnn library calls to implement any operator.
+
+## Generate CUDA kernels optimized for {{ GPU_name }}, below is the Architecture information.
+{%- set info = GPU_list[GPU_name] -%}
+{%- if GPU_info_format is defined and GPU_info_format == 'json' -%}
+{{ info | tojson(indent=2, ensure_ascii=False) }}
+{%- else -%}
+{% for k, v in info.items() -%}
+- {{ k }}: {{ v }}
+{% endfor -%}
+{%- endif %}
+
+## Here is an examples of output formats you can refer to when generating your own, but do not be limited by their optimization methods. Feel free to output your own optimization strategies as boldly as possible.
+{{ examples }}
+
+## Now you are given the below PyTorch model:
+```python
+{{ py_code }}
+```
+
+Please respond with thinking process and your final answer.

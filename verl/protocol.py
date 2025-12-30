@@ -494,6 +494,10 @@ class DataProto:
         Returns:
             List[DataProto]: a list of DataProto after splitting
         """
+        if chunks == 0:
+            # If chunks is 0, return the original data as a single chunk
+            return [self]
+        assert chunks > 0, f"chunks must be positive, got {chunks}"
         assert len(self) % chunks == 0, (
             f"only support equal chunk. Got size of DataProto {len(self)} and chunk {chunks}."
         )
@@ -519,7 +523,12 @@ class DataProto:
         return output
 
     def split(self, split_size: int) -> List["DataProto"]:
+        if split_size <= 0:
+            raise ValueError(f"split_size must be positive, got {split_size}")
         chunks = len(self) // split_size
+        if chunks == 0:
+            # If split_size is larger than data size, return the original data as a single chunk
+            return [self]
         return self.chunk(chunks)
 
     @staticmethod

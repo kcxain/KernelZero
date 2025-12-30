@@ -540,7 +540,6 @@ class RayPPOTrainer:
                     # Removed intermediate step prints to reduce log clutter
                     with timer("gen", timing_raw):  # wg: worker group
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
-
                     if self.config.algorithm.adv_estimator == "remax":
                         with timer("gen_max", timing_raw):
                             gen_baseline_batch = deepcopy(gen_batch)
@@ -594,10 +593,23 @@ class RayPPOTrainer:
 
                     with timer("adv", timing_raw):
                         # get token level scores
-                        reward_tensor, reward_metrics = ray.get(reward_ref)
+                        reward_tensor, reward_metrics_raw = ray.get(reward_ref)
                         batch.batch["token_level_scores"] = reward_tensor
-                        reward_metrics = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics).items()}
+                        
+                        # 输出每个样本的 reward（已禁用，避免日志过多）
+                        # if "overall" in reward_metrics_raw and len(reward_metrics_raw["overall"]) > 0:
+                        #     print(f"[Step {self.global_step}] Per-sample Rewards:", file=sys.stderr, flush=True)
+                        #     for i, reward_val in enumerate(reward_metrics_raw["overall"]):
+                        #         print(f"  Sample {i}: reward={reward_val:.4f}", file=sys.stderr, flush=True)
+                        
+                        reward_metrics = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics_raw).items()}
                         metrics.update(reward_metrics)
+                        
+                        # 输出 reward 统计信息（在 trainer 层面）
+                        if reward_metrics:
+                            reward_summary = ", ".join([f"{k}={v:.7f}" if isinstance(v, (int, float)) else f"{k}={v}" 
+                                                       for k, v in reward_metrics.items()])
+                            print(f"[Step {self.global_step}] Reward Metrics (batch mean): {reward_summary}", file=sys.stderr, flush=True)
 
                         # apply kl penalty if available
                         if not self.config.algorithm.use_kl_loss and self.use_reference_policy:

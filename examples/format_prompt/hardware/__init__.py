@@ -1,0 +1,2 @@
+# Hardware specifications for GPU
+

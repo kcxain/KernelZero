@@ -224,12 +224,12 @@ class DataParallelPPOActor(BasePPOActor):
         mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
 
         metrics = defaultdict(list)
-        for _ in range(self.config.ppo_epochs):
+        for epoch_idx in range(self.config.ppo_epochs):
             # Disable internal progress bars - only show epoch progress
             # if self.rank == 0:
             #     mini_batches = tqdm(mini_batches, desc="Train mini-batches", position=2)
 
-            for mini_batch in mini_batches:
+            for mini_batch_idx, mini_batch in enumerate(mini_batches):
                 gradient_accumulation = (
                     self.config.global_batch_size_per_device // self.config.micro_batch_size_per_device_for_update
                 )
@@ -238,7 +238,7 @@ class DataParallelPPOActor(BasePPOActor):
                 # if self.rank == 0:
                 #     micro_batches = tqdm(micro_batches, desc="Update policy", position=3)
 
-                for micro_batch in micro_batches:
+                for micro_batch_idx_inner, micro_batch in enumerate(micro_batches):
                     model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
                     responses = model_inputs["responses"]
                     response_length = responses.size(1)
@@ -260,6 +260,17 @@ class DataParallelPPOActor(BasePPOActor):
                         clip_ratio_high=self.config.clip_ratio_high,
                         clip_ratio_dual=self.config.clip_ratio_dual,
                     )
+                    
+                    # 计算每个样本的 advantages mean（用于调试）
+                    batch_size = advantages.size(0)
+                    sample_adv_means = []
+                    for i in range(batch_size):
+                        sample_adv = torch.masked_select(advantages[i], response_mask[i].bool())
+                        sample_adv_mean = sample_adv.mean().detach().item() if sample_adv.numel() > 0 else 0.0
+                        sample_adv_means.append(sample_adv_mean)
+                    
+                    kl_loss = None
+                    sample_kl_means = []
                     if "ref_log_probs" in model_inputs:
                         ref_log_probs = model_inputs["ref_log_probs"]
                         # compute kl loss
@@ -272,6 +283,26 @@ class DataParallelPPOActor(BasePPOActor):
                         pg_loss = pg_loss + kl_loss * self.config.kl_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
+                        
+                        # 计算每个样本的 kl_loss mean（用于调试）
+                        for i in range(batch_size):
+                            sample_kld = torch.masked_select(kld[i], response_mask[i].bool())
+                            sample_kl_mean = sample_kld.mean().detach().item() if sample_kld.numel() > 0 else 0.0
+                            sample_kl_means.append(sample_kl_mean)
+                    
+                    # 输出每个样本的 loss 分解（已禁用，避免日志过多）
+                    # if self.rank == 0 and epoch_idx == 0 and mini_batch_idx == 0 and micro_batch_idx_inner == 0:
+                    #     print(f"[Actor Training] Per-sample Loss Breakdown (micro_batch size={batch_size}):", 
+                    #           file=__import__('sys').stderr, flush=True)
+                    #     for i in range(batch_size):
+                    #         kl_info = f", kl_loss={sample_kl_means[i]:.6f}" if kl_loss is not None else ""
+                    #         print(f"  Sample {i}: adv_mean={sample_adv_means[i]:.6f}{kl_info}, "
+                    #               f"pg_loss={pg_loss.detach().item()/batch_size:.6f} (per sample)", 
+                    #               file=__import__('sys').stderr, flush=True)
+                    #     print(f"  Batch total: pg_loss={pg_loss.detach().item():.6f}, "
+                    #           f"kl_loss={(kl_loss.detach().item() if kl_loss is not None else 0.0):.6f}, "
+                    #           f"grad_accum={gradient_accumulation}", 
+                    #           file=__import__('sys').stderr, flush=True)
 
                     loss = pg_loss / gradient_accumulation
                     loss.backward()

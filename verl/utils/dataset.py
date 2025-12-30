@@ -32,6 +32,8 @@ from . import torch_functional as VF
 
 import json
 import random
+import sys
+from pathlib import Path
 def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     tensors = defaultdict(list)
     non_tensors = defaultdict(list)
@@ -114,12 +116,31 @@ class RLHFDataset(Dataset):
 
         if os.path.isdir(data_path):
             # when we use dataset builder, we should always refer to the train split
-            self.dataset = load_dataset("parquet", data_dir=data_path, split="train")
+            self.dataset = load_dataset("parquet", data_dir=data_path, split=data_split)
         elif os.path.isfile(data_path):
-            self.dataset = load_dataset("parquet", data_files=data_path, split="train")
+            # 支持 JSON 文件格式（用于 torch 生成 CUDA 任务）
+            if data_path.endswith('.json') or data_path.endswith('.jsonl'):
+                # 从 JSON/JSONL 文件加载数据
+                with open(data_path, 'r', encoding='utf-8') as f:
+                    if data_path.endswith('.jsonl'):
+                        # JSONL 格式：每行一个 JSON 对象
+                        data_list = [json.loads(line) for line in f if line.strip()]
+                    else:
+                        # JSON 格式：可能是一个列表
+                        data_list = json.load(f)
+                        if not isinstance(data_list, list):
+                            data_list = [data_list]
+                # 转换为 datasets.Dataset
+                from datasets import Dataset
+                self.dataset = Dataset.from_list(data_list)
+            else:
+                # 默认使用 parquet 格式
+                self.dataset = load_dataset("parquet", data_files=data_path, split="train")
         else:
-            # load remote dataset from huggingface hub
-            self.dataset = load_dataset(data_path, split=data_split)
+            raise ValueError(
+                f"data_path '{data_path}' is neither a valid directory nor a valid file. "
+                f"Please check if the path exists and is accessible."
+            )
 
         self.format_prompt = None
         if format_prompt:
@@ -135,8 +156,47 @@ class RLHFDataset(Dataset):
             self.dataset = self.dataset.filter(self._filter_overlong_prompts, desc="Filtering overlong prompts")
 
     def _build_messages(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
-        prompt_str: str = example[self.prompt_key]
-        if "questioner_format_with_persona" in self.format_prompt:
+        # 如果使用 kernelbench 模板，从 raw_problem 字段读取数据
+        if self.format_prompt and "PyTorch and CUDA" in self.format_prompt:
+            # kernelbench 模板使用 raw_problem 字段作为输入，变量名为 py_code
+            # 参考 fs-eval/fs_eval/prompt_builder.py 的构造方式
+            if "raw_problem" in example:
+                py_code = example["raw_problem"]
+                format_prompt = Template(self.format_prompt.strip())
+                
+                # 导入 GPU_SPEC_INFO 和 softmax_example（与 fs-eval 保持一致）
+                try:
+                    # 获取项目根目录
+                    # 从 verl/utils/dataset.py 向上找到项目根（KernelZero）
+                    current_file = Path(__file__).resolve()
+                    # verl/utils/dataset.py -> verl/utils -> verl -> KernelZero
+                    project_root = current_file.parent.parent.parent
+                    if str(project_root) not in sys.path:
+                        sys.path.insert(0, str(project_root))
+                    from examples.format_prompt.hardware.gpu_specs import GPU_SPEC_INFO
+                    from examples.format_prompt.examples import softmax_example
+                except ImportError as e:
+                    # 如果导入失败，使用默认值
+                    print(f"Warning: Failed to import GPU_SPEC_INFO or softmax_example: {e}")
+                    GPU_SPEC_INFO = {}
+                    softmax_example = ""
+                
+                # 按照 fs-eval 的方式构造模板参数
+                prompt_str = format_prompt.render(
+                    GPU_name="A100-80GB",
+                    GPU_list=GPU_SPEC_INFO,
+                    examples=softmax_example,
+                    py_code=py_code,
+                    GPU_info_format="bullets",
+                )
+            else:
+                # 如果没有 raw_problem，尝试使用 prompt_key
+                prompt_str = example.get(self.prompt_key, "")
+        else:
+            # 非 kernelbench 格式，从 prompt_key 获取 prompt_str
+            prompt_str: str = example.get(self.prompt_key, "")
+
+        if self.format_prompt and "questioner_format_with_persona" in self.format_prompt:
             print("load personas")
             return [
                 {
@@ -164,7 +224,7 @@ class RLHFDataset(Dataset):
                     )
                 }
             ]
-        if "questioner_format" in self.format_prompt:
+        if self.format_prompt and "questioner_format" in self.format_prompt:
             # print('detected questioner_format')
             return [
                 {
@@ -192,11 +252,13 @@ class RLHFDataset(Dataset):
                     )
                 }
             ]
-        if "solver_format" in self.format_prompt:
+        if self.format_prompt and "solver_format" in self.format_prompt:
             return [{"role": "system", "content": r"Please reason step by step, and put your final answer within \boxed{}."},{"role": "user", "content": prompt_str}]
         if self.format_prompt:
-            format_prompt = Template(self.format_prompt.strip())
-            prompt_str = format_prompt.render(content=prompt_str)
+            # kernelbench 模板（包含 "PyTorch and CUDA"）已经在前面处理过了，这里处理其他模板
+            if "PyTorch and CUDA" not in self.format_prompt:
+                format_prompt = Template(self.format_prompt.strip())
+                prompt_str = format_prompt.render(content=prompt_str)
         
         if self.image_key in example:
             # https://huggingface.co/docs/transformers/en/tasks/image_text_to_text
@@ -285,5 +347,16 @@ class RLHFDataset(Dataset):
         example["attention_mask"] = attention_mask
         example["position_ids"] = position_ids
         example["raw_prompt_ids"] = raw_prompt_ids
-        example["ground_truth"] = example.pop(self.answer_key)
+        
+        # 设置 ground_truth：如果是 kernelbench 格式（包含 "PyTorch and CUDA"），使用 raw_problem；否则使用 answer_key
+        if self.format_prompt and "PyTorch and CUDA" in self.format_prompt:
+            # 对于 kernelbench，ground_truth 应该是 raw_problem（torch 代码）
+            if "raw_problem" in example:
+                example["ground_truth"] = example["raw_problem"]
+            else:
+                # 如果没有 raw_problem，尝试使用 answer_key
+                example["ground_truth"] = example.pop(self.answer_key, "")
+        else:
+            example["ground_truth"] = example.pop(self.answer_key)
+        
         return example
