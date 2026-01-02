@@ -2,27 +2,27 @@
 
 #- Job parameters
 
-#SBATCH -J R-Zero                  # The job name
-#SBATCH -o logs/R-Zero-%j.out         # Write the standard output to file named 'train-<job_number>.out'
-#SBATCH -e logs/R-Zero-%j.err         # Write the standard error to file named 'train-<job_number>.err'
+#SBATCH -J torch_generate_v0                  # The job name
+#SBATCH -o logs/torch_generate_v0-%j.out         # Write the standard output to file named 'train-<job_number>.out'
+#SBATCH -e logs/torch_generate_v0-%j.err         # Write the standard error to file named 'train-<job_number>.err'
 
 
 #- Resources
 
-#SBATCH -p r8nv-gpu-hw               # Submit to 'r8nv-gpu-hw-80g' Partition (A100 80GB)
-#SBATCH -t 0-30:00:00                # Run for a maximum time of 0 days, 24 hours, 00 mins, 00 secs
+#SBATCH -p r8nv-gpu-hw-80g               # Submit to 'r8nv-gpu-hw-80g' Partition (A100 80GB)
+#SBATCH -t 0-6:00:00                # Run for a maximum time of 0 days, 24 hours, 00 mins, 00 secs
 #SBATCH --nodes=1                    # Request 1 node
 #SBATCH --gres=gpu:8                 # Request 8 GPUs per node
 #SBATCH --gres-flags=enforce-binding # CPU-GPU Affinity
 #SBATCH --qos=gpu-normal             # Request QOS Type
-#SBATCH --mem=512G                   # CPU 内存 (降低内存请求，避免资源不足)
+### #SBATCH --mem=512G                   # CPU 内存 (降低内存请求，避免资源不足)
 #SBATCH --cpus-per-task=64           # CPU 核数 (8 GPUs × 8 cores = 64 cores)         
 #SBATCH --exclude=r8a100-d00
 #SBATCH --exclude=r8a100-d05         # Exclude broken node d05
 #SBATCH --exclude=r8l40s-a04
 #SBATCH --exclude=r8l40s-a02
-#SBATCH --constraint="L40S"
-#SBATCH --nodelist=r8l40s-a01        # Request a specific list of hosts 
+### #SBATCH --constraint="L40S"
+### #SBATCH --nodelist=r8l40s-a01        # Request a specific list of hosts 
 ###
 ### The system will alloc 8 or 16 cores per gpu by default.
 ### If you need more or less, use following:
@@ -67,7 +67,7 @@ export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 #- storage path
-export STORAGE_PATH=/nfs_global/S/fangzixiang/train_model/R-zero/test2
+export STORAGE_PATH=./train_model/kernelzero/v0
 #  建立存储文件
 mkdir -p \
   "$STORAGE_PATH/evaluation" \
@@ -77,26 +77,26 @@ mkdir -p \
 
 ##- virtualenv
 # 初始化 conda（如果尚未初始化）
-if [ -f "/workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh" ]; then
-    source /workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh
-elif [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
-    source $HOME/miniconda/etc/profile.d/conda.sh
-fi
+# if [ -f "/workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh" ]; then
+#     source /workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh
+# elif [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
+#     source $HOME/miniconda/etc/profile.d/conda.sh
+# fi
 
-# 激活 conda 环境
-conda activate r-zero || {
-    echo "✗ Failed to activate conda environment 'r-zero'. Exiting."
-    exit 1
-}
+# # 激活 conda 环境
+# conda activate r-zero || {
+#     echo "✗ Failed to activate conda environment 'r-zero'. Exiting."
+#     exit 1
+# }
 
-# 验证 conda 环境是否成功激活
-if [ -z "$CONDA_DEFAULT_ENV" ]; then
-    echo "✗ Warning: Conda environment may not be activated properly."
-    echo "Current Python: $(which python)"
-else
-    echo "✓ Conda environment activated: $CONDA_DEFAULT_ENV"
-    echo "✓ Python path: $(which python)"
-fi
+# # 验证 conda 环境是否成功激活
+# if [ -z "$CONDA_DEFAULT_ENV" ]; then
+#     echo "✗ Warning: Conda environment may not be activated properly."
+#     echo "Current Python: $(which python)"
+# else
+#     echo "✓ Conda environment activated: $CONDA_DEFAULT_ENV"
+#     echo "✓ Python path: $(which python)"
+# fi
 
 #- Other
 
@@ -121,6 +121,6 @@ ray stop --force
 ray start --head
 
 # 启动脚本
-bash scripts/main.sh /share/collab/codemodel/models/Qwen/Qwen2.5-Coder-1.5B-Instruct qwen2.5-coder-1.5b-instruct
+bash torch_generate/question_generate.bash /share/personal/S/wangshuohit/Qwen2.5-Coder-7B-Instruct 1 2ops resources/torch_ops/2ops.json
 
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"
