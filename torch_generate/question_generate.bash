@@ -2,6 +2,7 @@
 model_name=$1
 num_samples=$2
 save_name=$3
+combination_file=$4
 export VLLM_DISABLE_COMPILE_CACHE=1
 export PYTHON_MULTIPROCESSING_START_METHOD=spawn
 export VLLM_USE_V1=0
@@ -14,7 +15,7 @@ import os
 model_name = sys.argv[1]
 num_samples = sys.argv[2]
 save_name = sys.argv[3]
-
+combination_file = sys.argv[4]
 # Ensure environment variables are set
 env = os.environ.copy()
 env['VLLM_DISABLE_COMPILE_CACHE'] = '1'
@@ -26,10 +27,11 @@ for gpu_id in range(8):
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     cmd = [
         sys.executable,
-        'question_generate/question_generate.py',
+        'torch_generate/question_generate.py',
         '--model', model_name,
         '--suffix', str(gpu_id),
         '--num_samples', num_samples,
+        '--combination_file', combination_file,
         '--save_name', save_name
     ]
     p = subprocess.Popen(cmd, env=env)
@@ -38,4 +40,4 @@ for gpu_id in range(8):
 # Wait for all processes to complete
 for p in processes:
     p.wait()
-" "$model_name" "$num_samples" "$save_name"
+" "$model_name" "$num_samples" "$save_name" "$combination_file"
