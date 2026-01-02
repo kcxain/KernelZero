@@ -29,3 +29,7 @@
 ```
 
 ```
+
+## Acknowledgments
+
+Our framework is directly based on the great work of [R-Zero](https://github.com/Chengsong-Huang/R-Zero), implementing all of its core functionalities.
