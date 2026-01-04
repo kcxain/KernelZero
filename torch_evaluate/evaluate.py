@@ -1,248 +1,360 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-'''
+"""
 Description:
-    This script evaluates generated answers against golden answers for a set of questions.
-    It uses vLLM for efficient generation and a robust, timed grading mechanism to score the results.
+    This script evaluates generated PyTorch modules from question_generate.py.
+    It performs AST validation to check if the code uses the expected operators,
+    and dynamic CUDA validation to ensure the code executes correctly without NaN/Inf.
     The script is designed to run as a batch job, often in parallel across multiple GPUs.
 
 Refactoring Notes:
-    - Replaced 'timeout-decorator' with the thread-safe 'stopit' library to provide robust
-      timeout protection for the grading function without causing errors.
-    - Optimized the answer comparison logic to perform cheap checks first, only calling the
-      expensive grading function when necessary.
-    - Improved error handling and code structure for better readability and stability.
+    - Adapted from math problem evaluation to PyTorch module evaluation
+    - Uses ast_checker for static analysis and dynamic_checker for runtime validation
+    - Filters modules based on operator usage and execution correctness
+    - Refactored into a class-based structure for better organization
 
 Setup:
-    pip install stopit transformers torch vllm
+    pip install torch
 
 Example Usage (in a shell script):
-    # This would run the script for GPU 0, with a specific model and save name.
-    CUDA_VISIBLE_DEVICES=0 python evaluate.py --model "Qwen/Qwen3-4B-Base" --suffix 0 --save_name "my_experiment" &
-'''
+    # This would run the script for GPU 0, with a specific save name.
+    CUDA_VISIBLE_DEVICES=0 python evaluate.py --suffix 0 --save_name "my_experiment" &
+"""
 
-# CRITICAL: Set multiprocessing start method to 'spawn' BEFORE importing vllm
-# This is required because vLLM V1 engine uses multiprocessing and CUDA cannot
-# be re-initialized in forked subprocesses. The 'spawn' method creates fresh
-# Python processes instead of forking, which is compatible with CUDA.
-import multiprocessing
-import os
-
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
-# 禁用 vLLM V1 引擎，V1 引擎有 fork 问题
-os.environ['VLLM_USE_V1'] = '0'
-
-# Set environment variable first
-os.environ['PYTHON_MULTIPROCESSING_START_METHOD'] = 'spawn'
-
-# Then set the start method programmatically
-try:
-    current_method = multiprocessing.get_start_method(allow_none=True)
-    if current_method != 'spawn':
-        multiprocessing.set_start_method('spawn', force=True)
-        print(f"[DEBUG] Set multiprocessing start method to 'spawn' (was: {current_method})")
-    else:
-        print(f"[DEBUG] Multiprocessing start method already 'spawn'")
-except RuntimeError as e:
-    # Start method can only be set once, and only from the main module
-    if 'start method' in str(e).lower():
-        print(f"[DEBUG] Multiprocessing start method already set: {e}")
-    else:
-        raise
-
-# Now it's safe to import vllm and other modules that might use multiprocessing
 import json
-import vllm
-from transformers import AutoTokenizer
+import os
 import argparse
-import re
 import warnings
-import stopit  # Use the robust, thread-safe stopit library for timeouts
-from mathruler.grader import extract_boxed_content, grade_answer
+from typing import List, Dict, Optional
+from ast_checker import check_operators_used
+from dynamic_checker import execute_model_on_cuda
 
-# Suppress pylatexenc warnings about macro substitution
-warnings.filterwarnings("ignore", message=".*macro.*failed its substitution.*", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*Error in configuration.*", category=UserWarning)
+warnings.filterwarnings("ignore")
 
-# --- Argument Parsing ---
-parser = argparse.ArgumentParser(description="Evaluate generated questions using vLLM.")
-parser.add_argument("--model", type=str, default="Qwen/Qwen3-4B-Base", help="Path to the model in Hugging Face format.")
-parser.add_argument("--num_samples", type=int, default=9, help="Number of candidate answers to generate per question (n).")
-parser.add_argument("--suffix", type=str, default="0", help="A unique suffix for file naming, often the GPU index.")
-parser.add_argument("--save_name", type=str, required=True, help="A base name for input and output files.")
-args = parser.parse_args()
 
-# --- Constants and Paths ---
-STORAGE_PATH = os.getenv("STORAGE_PATH", "/apdcephfs_sh2/share_300000800/user/chengchuang")
-INPUT_FILE = f"{STORAGE_PATH}/generated_question/{args.save_name}_{args.suffix}.json"
-OUTPUT_FILE = f"{STORAGE_PATH}/generated_question/{args.save_name}_{args.suffix}_results.json"
+class PyTorchModuleEvaluator:
+    """Evaluator for generated PyTorch modules."""
 
-# --- Timeout-Protected Grading Function ---
-@stopit.threading_timeoutable(default='TIMED_OUT')
-def grade_answer_with_timeout(res1, res2):
-    """
-    Wraps the mathruler 'grade_answer' function with a timeout.
-    If the function takes too long, it returns 'TIMED_OUT' instead of hanging.
-    """
-    # The actual timeout value is passed as a keyword argument on each call.
-    return grade_answer(res1, res2)
+    def __init__(
+        self,
+        suffix: str,
+        save_name: str,
+        check_cuda: bool = True,
+        check_ast: bool = True,
+        storage_path: Optional[str] = None,
+    ):
+        """
+        Initialize the evaluator.
 
-# --- Main Script Logic ---
+        Args:
+            suffix: A unique suffix for file naming, often the GPU index.
+            save_name: A base name for input and output files.
+            check_cuda: Whether to perform CUDA execution validation.
+            check_ast: Whether to perform AST operator validation.
+            storage_path: Path to storage directory. If None, uses STORAGE_PATH env var.
+        """
+        self.suffix = suffix
+        self.save_name = save_name
+        self.check_cuda = check_cuda
+        self.check_ast = check_ast
 
-# 1. Load and Prepare Data
-print(f"[{args.suffix}] Loading data from: {INPUT_FILE}")
-try:
-    with open(INPUT_FILE, "r") as f:
-        data = json.load(f)
-    # Clean up the input file immediately after loading to save space
-    os.remove(INPUT_FILE)
-except FileNotFoundError:
-    print(f"[{args.suffix}] ERROR: Input file not found. Exiting.")
-    exit()
+        # Set up paths
+        if storage_path is None:
+            storage_path = os.getenv("STORAGE_PATH")
+        if storage_path is None:
+            raise ValueError("STORAGE_PATH environment variable not set")
 
-# Filter data into questions that need processing
-correct_data = [item for item in data if item.get('score') == 0]
-if not correct_data:
-    print(f"[{args.suffix}] No new questions to process (score=0). Exiting.")
-    # Create an empty results file to signal completion
-    with open(OUTPUT_FILE, "w") as f:
-        json.dump([], f)
-    exit()
+        self.storage_path = storage_path
+        self.input_file = f"{storage_path}/generated_modules/{save_name}_{suffix}.json"
+        self.output_file = (
+            f"{storage_path}/generated_modules/{save_name}_{suffix}_results.json"
+        )
 
-questions = [item["question"] for item in correct_data]
-answers = [item["answer"] for item in correct_data]
-print(f"[{args.suffix}] Found {len(questions)} questions to process.")
+        # Results storage
+        self.modules_to_process: List[Dict] = []
+        self.results: List[Dict] = []
 
-# 2. Initialize Model and Tokenizer
-print(f"[{args.suffix}] Initializing vLLM for model: {args.model}")
-tokenizer = AutoTokenizer.from_pretrained(args.model)
-model = vllm.LLM(
-    model=args.model,
-    tokenizer=args.model,
-    gpu_memory_utilization=0.85,
-    seed=int(args.suffix),
-)
-sample_params = vllm.SamplingParams(
-    max_tokens=4096,
-    temperature=1.0,
-    top_p=1.0,
-    top_k=40,
-    stop_token_ids=[tokenizer.eos_token_id],
-    n=args.num_samples,
-)
+    def load_data(self) -> bool:
+        """
+        Load input data from file.
 
-# 3. Generate Responses
-print(f"[{args.suffix}] Generating {args.num_samples} samples for each question...")
-chats = [[{"role": "system", "content": "Please reason step by step, and put your final answer within \\boxed{}."},{"role": "user", "content": q}] for q in questions]
+        Returns:
+            True if data loaded successfully, False otherwise.
+        """
+        print(f"[{self.suffix}] Loading data from: {self.input_file}")
+        try:
+            with open(self.input_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-if tokenizer.chat_template:
-    prompts = [tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True, add_special_tokens=True) for chat in chats]
-else:
-    prompts = ["system: " + chat[0]["content"] + '\n' + "user: " + chat[1]["content"] for chat in chats]
+            # Clean up the input file immediately after loading to save space
+            # os.remove(self.input_file)
 
-responses = model.generate(prompts, sampling_params=sample_params, use_tqdm=True)
-print(f"[{args.suffix}] Generation complete.")
+            # Filter data into modules that need processing
+            # Only process items with score >= 0 (score=-1 means parsing failed, skip those)
+            self.modules_to_process = [
+                item for item in data
+            ]
 
-# 4. Process and Grade Responses
-results_all = []
-print(f"[{args.suffix}] Grading responses...")
-for response, golden_answer, question in zip(responses, answers, questions):
-    try:
-        # Extract the boxed content from all generated samples
-        results = [extract_boxed_content(output.text) for output in response.outputs]
-        results = [res for res in results if res] # Filter out None/empty results
+            if not self.modules_to_process:
+                print(f"[{self.suffix}] No modules to process. Exiting.")
+                # Create an empty results file to signal completion
+                with open(self.output_file, "w", encoding="utf-8") as f:
+                    json.dump([], f, indent=4, ensure_ascii=False)
+                return False
 
-        if not results:
-            print(f"[{args.suffix}] WARNING: No valid boxed answers found for question: '{question[:50]}...'")
-            continue
+            print(
+                f"[{self.suffix}] Found {len(self.modules_to_process)} modules to process."
+            )
+            return True
 
-        answer_counts = {}
-        for result in results:
-            matched = False
-            for existing_answer in answer_counts:
-                # OPTIMIZATION: Perform cheap string comparisons first.
-                if result == existing_answer or ('no ' in result.lower() and 'no ' in existing_answer.lower()):
-                    answer_counts[existing_answer] += 1
-                    matched = True
-                    break
-                
-                # If cheap checks fail, use the expensive, timed grader.
-                # Check both directions (A vs B and B vs A).
-                match_1 = grade_answer_with_timeout(result, existing_answer, timeout=10)
-                if match_1 == 'TIMED_OUT':
-                    print(f"[{args.suffix}] GRADER TIMEOUT on: '{result[:30]}...' vs '{existing_answer[:30]}...'")
-                    continue # Skip to the next existing_answer
-                
-                if match_1:
-                    answer_counts[existing_answer] += 1
-                    matched = True
-                    break
+        except FileNotFoundError:
+            print(f"[{self.suffix}] ERROR: Input file not found. Exiting.")
+            return False
+        except Exception as e:
+            print(f"[{self.suffix}] ERROR: Failed to load data: {e}")
+            return False
 
-                match_2 = grade_answer_with_timeout(existing_answer, result, timeout=10)
-                if match_2 == 'TIMED_OUT':
-                    print(f"[{args.suffix}] GRADER TIMEOUT on: '{existing_answer[:30]}...' vs '{result[:30]}...'")
-                    continue
+    def validate_module(self, item: Dict) -> Dict:
+        """
+        Validate a single module.
 
-                if match_2:
-                    answer_counts[existing_answer] += 1
-                    matched = True
-                    break
+        Args:
+            item: Module data dictionary containing operators, code, etc.
 
-            if not matched:
-                answer_counts[result] = 1
+        Returns:
+            Validation result dictionary.
+        """
+        operators = item.get("operators", [])
+        code = item.get("code", "")
+        combination_index = item.get("combination_index", -1)
+        prompt = item.get("prompt", "")
+        raw_response = item.get("raw_response", "")
 
-        if not answer_counts:
-            continue
+        # Handle empty code
+        if not code:
+            print(f"[{self.suffix}] WARNING: Empty code for module")
+            return {
+                "combination_index": combination_index,
+                "operators": operators,
+                "code": code,
+                "score": -1,
+                "validation_passed": False,
+                "errors": ["Empty code"],
+                "ast_check": None,
+                "cuda_check": None,
+            }
 
-        # Determine the majority answer and its score
-        majority_answer = max(answer_counts, key=answer_counts.get)
-        max_count = answer_counts[majority_answer]
-        score = max_count / len(results)
+        validation_errors = []
+        ast_check_result = None
+        cuda_check_result = None
 
-        # Skip certain question types that are hard to grade automatically
-        if "证明" in question or 'box' in question.lower() or 'text' in majority_answer.lower():
-            continue
+        # AST Validation: Check if code uses expected operators
+        if self.check_ast and operators:
+            try:
+                check_result = check_operators_used(operators, code)
+                passed = check_result["all_used"]
+                ast_check_result = {
+                    "passed": passed,
+                    "used_apis": list(check_result["used_apis"]),
+                    "missing_apis": list(check_result["missing_apis"]),
+                    "details": check_result["details"],
+                }
+            except Exception as e:
+                ast_check_result = {
+                    "passed": False,
+                    "error": str(e),
+                }
+                validation_errors.append(f"AST check exception: {str(e)}")
 
-        results_all.append({
-            "question": question,
-            "answer": majority_answer,
+        # CUDA Dynamic Validation: Check if code executes correctly
+        if self.check_cuda:
+            try:
+                success, error = execute_model_on_cuda(code, timeout=10)
+                if success:
+                    cuda_check_result = {
+                        "passed": True,
+                        "error": None,
+                    }
+                else:
+                    cuda_check_result = {
+                        "passed": False,
+                        "error": error,
+                    }
+                    validation_errors.append(f"CUDA check failed: {error}")
+            except Exception as e:
+                cuda_check_result = {
+                    "passed": False,
+                    "error": str(e),
+                }
+                validation_errors.append(f"CUDA check exception: {str(e)}")
+        else:
+            cuda_check_result = {"passed": True, "note": "CUDA check disabled"}
+
+        score = 1
+        if not ast_check_result["passed"]:
+            score = -1
+        if not cuda_check_result["passed"]:
+            score = -1
+        # Build result
+        result = {
+            "combination_index": combination_index,
+            "operators": operators,
+            "code": code,
             "score": score,
-            'results': results
-        })
+            "errors": validation_errors if validation_errors else None,
+            "ast_check": ast_check_result,
+            "cuda_check": cuda_check_result,
+        }
 
-    except Exception as e:
-        print(f"[{args.suffix}] CRITICAL ERROR processing question '{question[:50]}...': {e}")
-        continue
+        # Optionally include prompt and raw_response if needed
+        if prompt:
+            result["prompt"] = prompt
+        if raw_response:
+            result["raw_response"] = raw_response
 
-# 5. Save Final Results
-print(f"[{args.suffix}] Processed {len(results_all)} questions. Saving results to: {OUTPUT_FILE}")
-with open(OUTPUT_FILE, "w") as f:
-    json.dump(results_all, f, indent=4)
+        return result
 
-print(f"[{args.suffix}] Script finished.")
+    def process_all(self):
+        """Process all modules and validate them."""
+        print(f"[{self.suffix}] Validating modules...")
 
-'''输入格式
+        for idx, item in enumerate(self.modules_to_process):
+            result = self.validate_module(item)
+            self.results.append(result)
+
+            # Progress reporting
+            if (idx + 1) % 100 == 0:
+                passed_count = sum(1 for r in self.results if r.get("score", -1) == 1)
+                print(
+                    f"[{self.suffix}] Processed {idx + 1}/{len(self.modules_to_process)} modules, "
+                    f"{passed_count} passed validation"
+                )
+
+    def print_statistics(self):
+        """Print validation statistics."""
+        if not self.results:
+            return
+
+        passed_count = sum(1 for r in self.results if r.get("score", -1) == 1)
+        failed_count = sum(1 for r in self.results if r.get("score", -1) == -1)
+
+        total = len(self.results)
+        print(f"[{self.suffix}] Validation Statistics:")
+        print(f"  Total modules: {total}")
+        print(f"  Overall passed: {passed_count} ({100 * passed_count / total:.1f}%)")
+        print(f"  Overall failed: {failed_count} ({100 * failed_count / total:.1f}%)")
+
+    def save_results(self):
+        """Save validation results to output file."""
+        print(
+            f"[{self.suffix}] Processed {len(self.results)} modules. Saving results to: {self.output_file}"
+        )
+
+        with open(self.output_file, "w", encoding="utf-8") as f:
+            json.dump(self.results, f, indent=4, ensure_ascii=False)
+
+    def run(self):
+        """
+        Run the complete evaluation pipeline.
+
+        Returns:
+            True if evaluation completed successfully, False otherwise.
+        """
+        # Load data
+        if not self.load_data():
+            return False
+
+        # Process all modules
+        self.process_all()
+
+        # Print statistics
+        self.print_statistics()
+
+        # Save results
+        self.save_results()
+
+        print(f"[{self.suffix}] Script finished.")
+        return True
+
+
+def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description="Evaluate generated PyTorch modules.")
+    parser.add_argument(
+        "--suffix",
+        type=str,
+        default="0",
+        help="A unique suffix for file naming, often the GPU index.",
+    )
+    parser.add_argument(
+        "--save_name",
+        type=str,
+        required=True,
+        help="A base name for input and output files.",
+    )
+    parser.add_argument(
+        "--check_cuda",
+        action="store_true",
+        default=True,
+        help="Whether to perform CUDA execution validation (default: True).",
+    )
+    parser.add_argument(
+        "--check_ast",
+        action="store_true",
+        default=True,
+        help="Whether to perform AST operator validation (default: True).",
+    )
+    args = parser.parse_args()
+
+    # Create evaluator and run
+    evaluator = PyTorchModuleEvaluator(
+        suffix=args.suffix,
+        save_name=args.save_name,
+        check_cuda=args.check_cuda,
+        check_ast=args.check_ast,
+    )
+
+    evaluator.run()
+
+
+if __name__ == "__main__":
+    main()
+
+
+"""输入格式 (from question_generate.py)
 [
     {
-        "question": "生成的数学题目",
-        "answer": "标准答案（从\\boxed{}中提取）",
-        "score": 0  // 只有score=0的题目会被处理
+        "combination_index": 0,
+        "operators": ["torch.nn.Conv3d", "torch.softmax", "torch.nn.MaxPool3d"],
+        "code": "生成的PyTorch模块代码",
+        "raw_response": "模型的原始响应",
+        "prompt": "用于生成该样本的完整prompt"
     },
-    // ... 更多题目
+    // ... 更多模块
 ]
-'''
-'''输出格式
+"""
+
+"""输出格式
 [
     {
-        "question": "数学题目",
-        "answer": "多数答案（出现次数最多的答案）",
-        "score": 0.78,  // 多数答案的比例 (如 7/9 = 0.78)
-        "results": [    // 所有生成的候选答案
-            "答案1",
-            "答案2",
-            // ... 共num_samples个
-        ]
+        "combination_index": 0,
+        "operators": ["torch.nn.Conv3d", "torch.softmax", "torch.nn.MaxPool3d"],
+        "code": "生成的PyTorch模块代码",
+        "code_hash": "sha256哈希值（用于去重）",
+        "score": 1,  // 原始分数
+        "validation_passed": true,  // 是否通过验证
+        "errors": null,  // 错误列表（如果有）
+        "ast_check": {
+            "passed": true,
+            "note": "AST check passed"
+        },
+        "cuda_check": {
+            "passed": true,
+            "error": null
+        },
+        "prompt": "用于生成该样本的完整prompt（可选）",
+        "raw_response": "模型的原始响应（可选）"
     },
     // ... 更多评估结果
 ]
-'''
+"""
