@@ -211,44 +211,9 @@ def generate_module_for_combination(
                 # 如果没有代码块，尝试提取整个响应
                 code = response.strip()
 
-            # 验证代码是否包含所有必需的算子
-            def check_operator_used(op: str, code: str) -> bool:
-                # 完整路径检查
-                if op in code:
-                    return True
-                # 简化格式检查
-                op_simplified = (
-                    op.replace("torch.nn.functional.", "F.")
-                    .replace("torch.nn.", "nn.")
-                    .replace("torch.", "")
-                )
-                if op_simplified in code:
-                    return True
-                # 检查类名（对于nn.Module）
-                if op.startswith("torch.nn.") and "." in op:
-                    class_name = op.split(".")[-1]
-                    if (
-                        f"nn.{class_name}" in code
-                        or f"self.{class_name.lower()}" in code
-                    ):
-                        return True
-                # 检查函数名（对于torch.xxx和torch.nn.functional.xxx）
-                if "." in op:
-                    func_name = op.split(".")[-1]
-                    if (
-                        f"torch.{func_name}" in code
-                        or f"F.{func_name}" in code
-                        or f"{func_name}(" in code
-                    ):
-                        return True
-                return False
-
-            all_ops_used = all(check_operator_used(op, code) for op in operators)
-
             results.append({
                 "operators": operators,
                 "code": code,
-                "score": 1 if all_ops_used else 0,
                 "raw_response": response,
                 "prompt": prompt,  # 新增：保存prompt
             })
@@ -256,8 +221,6 @@ def generate_module_for_combination(
             results.append({
                 "operators": operators,
                 "code": response,
-                "score": -1,
-                "error": str(e),
                 "raw_response": response,
                 "prompt": prompt,  # 新增：保存prompt
             })
@@ -353,44 +316,9 @@ def process_batch_results(
                 # 如果没有代码块，尝试提取整个响应
                 code = response.strip()
 
-            # 验证代码是否包含所有必需的算子
-            def check_operator_used(op: str, code: str) -> bool:
-                # 完整路径检查
-                if op in code:
-                    return True
-                # 简化格式检查
-                op_simplified = (
-                    op.replace("torch.nn.functional.", "F.")
-                    .replace("torch.nn.", "nn.")
-                    .replace("torch.", "")
-                )
-                if op_simplified in code:
-                    return True
-                # 检查类名（对于nn.Module）
-                if op.startswith("torch.nn.") and "." in op:
-                    class_name = op.split(".")[-1]
-                    if (
-                        f"nn.{class_name}" in code
-                        or f"self.{class_name.lower()}" in code
-                    ):
-                        return True
-                # 检查函数名（对于torch.xxx和torch.nn.functional.xxx）
-                if "." in op:
-                    func_name = op.split(".")[-1]
-                    if (
-                        f"torch.{func_name}" in code
-                        or f"F.{func_name}" in code
-                        or f"{func_name}(" in code
-                    ):
-                        return True
-                return False
-
-            all_ops_used = all(check_operator_used(op, code) for op in operators)
-
             results.append({
                 "operators": operators,
                 "code": code,
-                "score": 1 if all_ops_used else 0,
                 "raw_response": response,
                 "prompt": prompt,  # 新增：保存prompt
             })
@@ -398,8 +326,6 @@ def process_batch_results(
             results.append({
                 "operators": operators,
                 "code": response,
-                "score": -1,
-                "error": str(e),
                 "raw_response": response,
                 "prompt": prompt,  # 新增：保存prompt
             })
@@ -581,12 +507,6 @@ def get_init_inputs():
                 result["prompt"] = prompt
             all_results.append(result)
 
-        # 统计当前的结果
-        success_count = sum(1 for r in batch_results if r["score"] == 1)
-        partial_count = sum(1 for r in batch_results if r["score"] == 0)
-        fail_count = sum(1 for r in batch_results if r["score"] == -1)
-        print(f"  成功: {success_count}, 部分成功: {partial_count}, 失败: {fail_count}")
-
     except Exception as e:
         print(f"  整体处理错误: {e}")
         # 为失败的批次添加错误结果
@@ -600,8 +520,6 @@ def get_init_inputs():
                 "combination_index": combination_idx,
                 "operators": operators,
                 "code": "",
-                "score": -1,
-                "error": str(e),
                 "prompt": prompt,
             })
 
@@ -619,24 +537,6 @@ def get_init_inputs():
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=4, ensure_ascii=False)
 
-    # 统计信息
-    total_results = len(all_results)
-    success_count = sum(1 for r in all_results if r["score"] == 1)
-    partial_count = sum(1 for r in all_results if r["score"] == 0)
-    fail_count = sum(1 for r in all_results if r["score"] == -1)
-
-    print(f"\n{'=' * 80}")
-    print("处理完成")
-    print(f"{'=' * 80}")
-    print(f"总组合数: {len(all_combinations)}")
-    print(f"总生成结果: {total_results}")
-    print(
-        f"  完全成功 (所有算子都使用): {success_count} ({100 * success_count / total_results:.1f}%)"
-    )
-    print(
-        f"  部分成功 (未完全使用): {partial_count} ({100 * partial_count / total_results:.1f}%)"
-    )
-    print(f"  失败: {fail_count} ({100 * fail_count / total_results:.1f}%)")
     print(f"\n结果已保存到: {output_file}")
 
 
@@ -690,7 +590,6 @@ if __name__ == "__main__":
     {
         "operators": ["torch.nn.Conv3d", "torch.softmax", "torch.nn.MaxPool3d"],
         "code": "生成的PyTorch模块代码",
-        "score": 1,  // 1表示所有算子都被使用，0表示未完全使用，-1表示解析失败
         "raw_response": "模型的原始响应",
         "prompt": "用于生成该样本的完整prompt"
     },
