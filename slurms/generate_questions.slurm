@@ -120,7 +120,8 @@ echo -e "\033[31m[×] 已关闭代理\033[0m"
 ray stop --force
 ray start --head
 
+export STORAGE_PATH=./train_model/kernelzero/v0_sft
 # 启动脚本
-bash torch_generate/question_generate.bash /share/personal/S/wangshuohit/Qwen2.5-Coder-7B-Instruct 1 2ops resources/torch_ops/2ops.json
+bash torch_generate/question_generate.bash /nfs_global/S/kechangxin/proj/llmpiler/checkpoints/qwen2.5-coder-cudallm_5k 1 2ops resources/torch_ops/2ops.json
 
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"
