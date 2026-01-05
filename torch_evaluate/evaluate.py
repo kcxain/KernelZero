@@ -42,6 +42,9 @@ class PyTorchModuleEvaluator:
         check_cuda: bool = True,
         check_ast: bool = True,
         storage_path: Optional[str] = None,
+        use_ray: bool = False,
+        use_cpu: bool = False,
+        ray_address: Optional[str] = None,
     ):
         """
         Initialize the evaluator.
@@ -52,11 +55,17 @@ class PyTorchModuleEvaluator:
             check_cuda: Whether to perform CUDA execution validation.
             check_ast: Whether to perform AST operator validation.
             storage_path: Path to storage directory. If None, uses STORAGE_PATH env var.
+            use_ray: Whether to use Ray for GPU resource management (prevents CUDA context pollution).
+            use_cpu: Whether to use CPU for execution validation (requires use_ray=True).
+            ray_address: Ray cluster address. If None and use_ray=True, starts local Ray.
         """
         self.suffix = suffix
         self.save_name = save_name
         self.check_cuda = check_cuda
         self.check_ast = check_ast
+        self.use_ray = use_ray
+        self.use_cpu = use_cpu
+        self.ray_address = ray_address
 
         # Set up paths
         if storage_path is None:
@@ -91,9 +100,7 @@ class PyTorchModuleEvaluator:
 
             # Filter data into modules that need processing
             # Only process items with score >= 0 (score=-1 means parsing failed, skip those)
-            self.modules_to_process = [
-                item for item in data
-            ]
+            self.modules_to_process = [item for item in data]
 
             if not self.modules_to_process:
                 print(f"[{self.suffix}] No modules to process. Exiting.")
@@ -166,10 +173,41 @@ class PyTorchModuleEvaluator:
                 }
                 validation_errors.append(f"AST check exception: {str(e)}")
 
-        # CUDA Dynamic Validation: Check if code executes correctly
+        # CUDA/CPU Dynamic Validation: Check if code executes correctly
         if self.check_cuda:
             try:
-                success, error = execute_model_on_cuda(code, timeout=10)
+                if self.use_ray:
+                    # Use Ray for resource management
+                    try:
+                        from ray_executor import execute_with_ray
+
+                        success, error = execute_with_ray(
+                            code,
+                            timeout=10,
+                            ray_address=self.ray_address,
+                            use_cpu=self.use_cpu,
+                        )
+                    except ImportError:
+                        # Fallback to direct execution if Ray not available
+                        if self.use_cpu:
+                            from dynamic_checker import execute_model_on_cpu
+
+                            success, error = execute_model_on_cpu(code, timeout=10)
+                        else:
+                            success, error = execute_model_on_cuda(
+                                code, timeout=10, cleanup_before=True
+                            )
+                else:
+                    # Direct execution with thorough cleanup
+                    if self.use_cpu:
+                        from dynamic_checker import execute_model_on_cpu
+
+                        success, error = execute_model_on_cpu(code, timeout=10)
+                    else:
+                        success, error = execute_model_on_cuda(
+                            code, timeout=10, cleanup_before=True
+                        )
+
                 if success:
                     cuda_check_result = {
                         "passed": True,
@@ -214,10 +252,25 @@ class PyTorchModuleEvaluator:
 
         return result
 
-    def process_all(self):
-        """Process all modules and validate them."""
+    def process_all(self, batch_size: int = None):
+        """
+        Process all modules and validate them.
+
+        Args:
+            batch_size: Batch size for Ray parallel execution. If None and use_ray=True,
+                       uses all available GPU capacity. Ignored if use_ray=False.
+        """
         print(f"[{self.suffix}] Validating modules...")
 
+        if self.use_ray and self.check_cuda:
+            # Use Ray for parallel batch processing
+            self._process_all_with_ray(batch_size)
+        else:
+            # Sequential processing
+            self._process_all_sequential()
+
+    def _process_all_sequential(self):
+        """Process modules sequentially."""
         for idx, item in enumerate(self.modules_to_process):
             result = self.validate_module(item)
             self.results.append(result)
@@ -229,6 +282,125 @@ class PyTorchModuleEvaluator:
                     f"[{self.suffix}] Processed {idx + 1}/{len(self.modules_to_process)} modules, "
                     f"{passed_count} passed validation"
                 )
+
+    def _process_all_with_ray(self, batch_size: int = None):
+        """Process modules in parallel batches using Ray."""
+        try:
+            from ray_executor import batch_execute_with_ray, init_ray_if_needed
+            import torch
+
+            # Initialize Ray
+            init_ray_if_needed(ray_address=self.ray_address)
+
+            # Calculate batch size
+            if batch_size is None:
+                # Use all available GPU capacity (2 tasks per GPU since num_gpus=0.5)
+                available_gpus = torch.cuda.device_count()
+                batch_size = available_gpus * 8
+
+            total = len(self.modules_to_process)
+            processed = 0
+
+            # Process in batches
+            for batch_start in range(0, total, batch_size):
+                batch_end = min(batch_start + batch_size, total)
+                batch_items = self.modules_to_process[batch_start:batch_end]
+
+                # Extract codes for CUDA validation
+                codes = [item.get("code", "") for item in batch_items]
+
+                # Batch execute CUDA validation
+                cuda_results = batch_execute_with_ray(
+                    codes,
+                    timeout=10,
+                    ray_address=self.ray_address,
+                    max_concurrent=batch_size,
+                )
+
+                # Process results
+                for idx, (item, (cuda_success, cuda_error)) in enumerate(
+                    zip(batch_items, cuda_results)
+                ):
+                    # Do AST check
+                    operators = item.get("operators", [])
+                    code = item.get("code", "")
+                    combination_index = item.get("combination_index", -1)
+                    prompt = item.get("prompt", "")
+                    raw_response = item.get("raw_response", "")
+
+                    validation_errors = []
+                    ast_check_result = None
+
+                    # AST Validation
+                    if self.check_ast and operators:
+                        try:
+                            from ast_checker import check_operators_used
+
+                            check_result = check_operators_used(operators, code)
+                            passed = check_result["all_used"]
+                            ast_check_result = {
+                                "passed": passed,
+                                "used_apis": list(check_result["used_apis"]),
+                                "missing_apis": list(check_result["missing_apis"]),
+                                "details": check_result["details"],
+                            }
+                        except Exception as e:
+                            ast_check_result = {
+                                "passed": False,
+                                "error": str(e),
+                            }
+                            validation_errors.append(f"AST check exception: {str(e)}")
+
+                    # CUDA check result
+                    if cuda_success:
+                        cuda_check_result = {"passed": True, "error": None}
+                    else:
+                        cuda_check_result = {"passed": False, "error": cuda_error}
+                        validation_errors.append(f"CUDA check failed: {cuda_error}")
+
+                    # Calculate score
+                    score = 1
+                    if ast_check_result and not ast_check_result["passed"]:
+                        score = -1
+                    if not cuda_check_result["passed"]:
+                        score = -1
+
+                    # Build result
+                    result = {
+                        "combination_index": combination_index,
+                        "operators": operators,
+                        "code": code,
+                        "score": score,
+                        "errors": validation_errors if validation_errors else None,
+                        "ast_check": ast_check_result,
+                        "cuda_check": cuda_check_result,
+                    }
+
+                    if prompt:
+                        result["prompt"] = prompt
+                    if raw_response:
+                        result["raw_response"] = raw_response
+
+                    self.results.append(result)
+                    processed += 1
+
+                # Progress reporting
+                passed_count = sum(1 for r in self.results if r.get("score", -1) == 1)
+                print(
+                    f"[{self.suffix}] Processed {processed}/{total} modules, "
+                    f"{passed_count} passed validation (batch {batch_start // batch_size + 1})"
+                )
+
+        except ImportError:
+            print(
+                f"[{self.suffix}] Warning: Ray not available, falling back to sequential processing"
+            )
+            self._process_all_sequential()
+        except Exception as e:
+            print(
+                f"[{self.suffix}] Error in Ray batch processing: {e}, falling back to sequential"
+            )
+            self._process_all_sequential()
 
     def print_statistics(self):
         """Print validation statistics."""
@@ -304,6 +476,24 @@ def main():
         default=True,
         help="Whether to perform AST operator validation (default: True).",
     )
+    parser.add_argument(
+        "--use_ray",
+        action="store_true",
+        default=False,
+        help="Use Ray for GPU resource management (prevents CUDA context pollution).",
+    )
+    parser.add_argument(
+        "--use_cpu",
+        action="store_true",
+        default=False,
+        help="Use CPU for execution validation (works with --use_ray).",
+    )
+    parser.add_argument(
+        "--ray_address",
+        type=str,
+        default=None,
+        help="Ray cluster address. If not specified and --use_ray, starts local Ray.",
+    )
     args = parser.parse_args()
 
     # Create evaluator and run
@@ -312,6 +502,9 @@ def main():
         save_name=args.save_name,
         check_cuda=args.check_cuda,
         check_ast=args.check_ast,
+        use_ray=args.use_ray,
+        use_cpu=args.use_cpu,
+        ray_address=args.ray_address,
     )
 
     evaluator.run()
@@ -340,7 +533,6 @@ if __name__ == "__main__":
         "combination_index": 0,
         "operators": ["torch.nn.Conv3d", "torch.softmax", "torch.nn.MaxPool3d"],
         "code": "生成的PyTorch模块代码",
-        "code_hash": "sha256哈希值（用于去重）",
         "score": 1,  // 原始分数
         "validation_passed": true,  // 是否通过验证
         "errors": null,  // 错误列表（如果有）
