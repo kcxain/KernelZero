@@ -80,17 +80,17 @@ def _evaluate_single_sample(
         return sample_idx, {"overall": reward}
         
     except requests.exceptions.Timeout:
-        if sample_idx % 1 == 0:  # 每个样本都输出日志
+        if sample_idx % 10 == 0:  # 每个样本都输出日志
             print(f"[Reward Sample {sample_idx}] ✗ TIMEOUT | Reward: 0.0000 | API timeout: {gpu_ip}", 
                   file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
     except requests.exceptions.RequestException as e:
-        if sample_idx % 1 == 0:  # 每个样本都输出日志
+        if sample_idx % 10 == 0:  # 每个样本都输出日志
             print(f"[Reward Sample {sample_idx}] ✗ API_ERROR | Reward: 0.0000 | Error: {e}", 
                   file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
     except Exception as e:
-        if sample_idx % 1 == 0:  # 每个样本都输出日志
+        if sample_idx % 10 == 0:  # 每个样本都输出日志
             print(f"[Reward Sample {sample_idx}] ✗ UNKNOWN_ERROR | Reward: 0.0000 | Error: {e}", 
                   file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
