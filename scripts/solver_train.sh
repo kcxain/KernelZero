@@ -20,19 +20,20 @@ echo 'start train'
 
 python3 -m verl.trainer.main \
     config=examples/config.yaml \
-    data.max_response_length=4096 \
+    data.max_response_length=16384 \
+    worker.rollout.max_num_batched_tokens=24576 \
     worker.actor.model.model_path=$solver_model_path \
     trainer.experiment_name=${experiment_name} \
     trainer.save_checkpoint_path=${STORAGE_PATH}/models/${experiment_name}/ \
-    data.train_files=${STORAGE_PATH}/generated_question/${experiment_name}_train/KernelBench-level_1.jsonl \
+    data.train_files=${STORAGE_PATH}/generated_question/${experiment_name}_train/merge_data.json \
     trainer.total_epochs=100 \
-    trainer.max_steps=1 \
+    trainer.max_steps=11 \
     data.format_prompt=./examples/format_prompt/kernelbench.jinja \
     trainer.val_freq=-1 \
     trainer.val_before_train=false \
     worker.actor.micro_batch_size_per_device_for_update=1 \
     worker.actor.micro_batch_size_per_device_for_experience=1 \
-    trainer.save_freq=1
+    trainer.save_freq=5
 
 # echo "merging model"
 # python scripts/model_merger.py --local_dir ${STORAGE_PATH}/models/${experiment_name}/global_step_1/actor

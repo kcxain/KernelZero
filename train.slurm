@@ -9,7 +9,7 @@
 
 #- Resources
 
-#SBATCH -p r8nv-gpu-hw               # Submit to 'r8nv-gpu-hw-80g' Partition (A100 80GB)
+#SBATCH -p r8nv-gpu-hw-80g               # Submit to 'r8nv-gpu-hw-80g' Partition (A100 80GB)
 #SBATCH -t 0-30:00:00                # Run for a maximum time of 0 days, 24 hours, 00 mins, 00 secs
 #SBATCH --nodes=1                    # Request 1 node
 #SBATCH --gres=gpu:8                 # Request 8 GPUs per node
@@ -21,8 +21,8 @@
 #SBATCH --exclude=r8a100-d05         # Exclude broken node d05
 #SBATCH --exclude=r8l40s-a04
 #SBATCH --exclude=r8l40s-a02
-#SBATCH --constraint="L40S"
-#SBATCH --nodelist=r8l40s-a01        # Request a specific list of hosts 
+###SBATCH --constraint="L40S"
+###SBATCH --nodelist=r8l40s-a01        # Request a specific list of hosts 
 ###
 ### The system will alloc 8 or 16 cores per gpu by default.
 ### If you need more or less, use following:
@@ -67,7 +67,7 @@ export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 #- storage path
-export STORAGE_PATH=/nfs_global/S/fangzixiang/train_model/R-zero/test2
+export STORAGE_PATH=/nfs_global/S/fangzixiang/train_model/R-zero/test
 #  建立存储文件
 mkdir -p \
   "$STORAGE_PATH/evaluation" \
@@ -117,10 +117,13 @@ unset HTTPS_PROXY
 unset NO_PROXY
 echo -e "\033[31m[×] 已关闭代理\033[0m"
 
+# 设置环境变量（在 Ray 启动之前设置，以便传递给 worker 进程）
+export CUDA_SERVER_IP="10.200.198.13"
+
 ray stop --force
 ray start --head
 
 # 启动脚本
-bash scripts/main.sh /share/collab/codemodel/models/Qwen/Qwen2.5-Coder-1.5B-Instruct qwen2.5-coder-1.5b-instruct
+bash scripts/main.sh /nfs_global/S/fangzixiang/train_model/Qwen2.5-Coder-7B-Instruct-CUDA-speedup/full/speed_up_batch_234/checkpoint-606/ qwen2.5-coder-7b-instruct_speedup
 
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"

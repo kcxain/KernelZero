@@ -85,6 +85,7 @@ class vLLMRollout(BaseRollout):
             disable_log_stats=config.disable_log_stats,
             enforce_eager=config.enforce_eager,
             disable_custom_all_reduce=True,
+            disable_cascade_attn=True,
             # disable_mm_preprocessor_cache=True,
             enable_chunked_prefill=config.enable_chunked_prefill,
             enable_sleep_mode=True,
@@ -105,7 +106,8 @@ class vLLMRollout(BaseRollout):
                 continue
             if hasattr(default_sampling_params, key):
                 sampling_kwargs[key] = getattr(config, key)
-        print(f"Sampling params: {sampling_kwargs}.")
+        print(f"Sampling params: {sampling_kwargs}.", file=__import__('sys').stderr, flush=True)
+        print(f"Max tokens (response_length): {config.response_length}", file=__import__('sys').stderr, flush=True)
         self.sampling_params = SamplingParams(**sampling_kwargs)
 
     @contextmanager
