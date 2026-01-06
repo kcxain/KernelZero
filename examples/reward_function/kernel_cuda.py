@@ -1,6 +1,7 @@
 import os
 import re
-from typing import Dict, List
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Tuple
 
 import requests
 
@@ -26,12 +27,81 @@ def extract_code_block(text: str) -> str:
     return "CANNOT EXTRACT CODE"
 
 
+def _evaluate_single_sample(
+    sample_idx: int, predict: str, torch_code: str, gpu_ip: str
+) -> Tuple[int, Dict[str, float]]:
+    """
+    评估单个样本的 CUDA 代码
+    
+    Args:
+        sample_idx: 样本索引
+        predict: 模型生成的代码
+        torch_code: PyTorch 参考代码
+        gpu_ip: GPU 服务器 IP
+        
+    Returns:
+        Tuple[int, Dict]: (样本索引, 得分字典)
+    """
+    # 提取代码块（从模型输出中提取 CUDA 代码）
+    cuda_code = extract_code_block(predict)
+    
+    # 如果提取失败，直接标记为失败，不发送到评估 API
+    if cuda_code == "CANNOT EXTRACT CODE":
+        if sample_idx % 1 == 0:  # 每个样本都输出日志
+            print(f"[Reward Sample {sample_idx}] ✗ EXTRACT_FAILED | Reward: 0.0000 | Cannot extract code from model output", 
+                  file=__import__('sys').stderr, flush=True)
+        return sample_idx, {"overall": 0.0}
+    
+    # 调用 API 评估
+    try:
+        response = requests.post(
+            url=f"http://{gpu_ip}:8000/compute_score",
+            data={
+                "cuda_code": cuda_code,
+                "torch_code": torch_code,
+            },
+            proxies={"http": None, "https": None},
+        )
+        response.raise_for_status()
+        res_json = response.json()
+        passed = res_json.get("passed", False)
+        
+        # 根据是否通过设置 reward: passed=1.0, not passed=0.0
+        reward = 1.0 if passed else 0.0
+        
+        # 打印每个样本的评估结果
+        if sample_idx % 1 == 0:  # 每个样本都输出日志
+            status = "✓ PASSED" if passed else "✗ FAILED"
+            print(f"[Reward Sample {sample_idx}] {status} | Reward: {reward:.4f} | "
+                  f"CUDA code length: {len(cuda_code)} chars | "
+                  f"Extracted from predict length: {len(predict)} chars", 
+                  file=__import__('sys').stderr, flush=True)
+        
+        return sample_idx, {"overall": reward}
+        
+    except requests.exceptions.Timeout:
+        if sample_idx % 1 == 0:  # 每个样本都输出日志
+            print(f"[Reward Sample {sample_idx}] ✗ TIMEOUT | Reward: 0.0000 | API timeout: {gpu_ip}", 
+                  file=__import__('sys').stderr, flush=True)
+        return sample_idx, {"overall": 0.0}
+    except requests.exceptions.RequestException as e:
+        if sample_idx % 1 == 0:  # 每个样本都输出日志
+            print(f"[Reward Sample {sample_idx}] ✗ API_ERROR | Reward: 0.0000 | Error: {e}", 
+                  file=__import__('sys').stderr, flush=True)
+        return sample_idx, {"overall": 0.0}
+    except Exception as e:
+        if sample_idx % 1 == 0:  # 每个样本都输出日志
+            print(f"[Reward Sample {sample_idx}] ✗ UNKNOWN_ERROR | Reward: 0.0000 | Error: {e}", 
+                  file=__import__('sys').stderr, flush=True)
+        return sample_idx, {"overall": 0.0}
+
+
 def compute_score(predicts: List[str], ground_truths: List[str]) -> List[Dict[str, float]]:
     """
-    计算生成的 CUDA 代码的得分
+    计算生成的 CUDA 代码的得分（并行版本）
     
-    参考 fs-eval/fs_eval/testbench/kernel_eval/execution.py 的实现方式
-    调用 API 评估，如果 passed 则 reward=1.0，否则 reward=0.0
+    参考 fs-eval/fs_eval/refine_sampler.py 的并行实现方式
+    使用 ThreadPoolExecutor 并行调用 API 评估，如果 passed 则 reward=1.0，否则 reward=0.0
     
     Args:
         predicts: 模型生成的代码列表（包含 CUDA 代码）
@@ -40,203 +110,29 @@ def compute_score(predicts: List[str], ground_truths: List[str]) -> List[Dict[st
     Returns:
         List[Dict]: 每个样本的得分字典，必须包含 overall 字段（reward 值）
     """
-    scores = []
     gpu_ip = os.environ.get("CUDA_SERVER_IP", "10.200.240.10")
     print(f"[Reward Function] CUDA_SERVER_IP from env: {gpu_ip}", file=__import__('sys').stderr, flush=True)
     
-    for predict, torch_code in zip(predicts, ground_truths):
-        # 提取代码块（从模型输出中提取 CUDA 代码）
-        cuda_code = extract_code_block(predict)
-        
-        # 如果提取失败，直接标记为失败，不发送到评估 API
-        if cuda_code == "CANNOT EXTRACT CODE":
-            sample_idx = len(scores)
-            if sample_idx % 1 == 0 or sample_idx == len(predicts) - 1:
-                print(f"[Reward Sample {sample_idx}] ✗ EXTRACT_FAILED | Reward: 0.0000 | Cannot extract code from model output", 
-                      file=__import__('sys').stderr, flush=True)
-                # # 输出ground_truth（源代码）和模型推理结果
-                # print(f"\n{'='*100}", file=__import__('sys').stderr, flush=True)
-                # print(f"[Reward Sample {sample_idx}] Ground Truth (Source Code):", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # # 检查torch_code的类型和值
-                # if torch_code is None:
-                #     print("[DEBUG] torch_code is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(torch_code, str):
-                #     if len(torch_code.strip()) == 0:
-                #         print("[DEBUG] torch_code is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(torch_code, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] torch_code type: {type(torch_code)}, value: {torch_code}", file=__import__('sys').stderr, flush=True)
-                #     print(str(torch_code), file=__import__('sys').stderr, flush=True)
-                # print(f"\n[Reward Sample {sample_idx}] Model Output:", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # if predict is None:
-                #     print("[DEBUG] predict is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(predict, str):
-                #     if len(predict.strip()) == 0:
-                #         print("[DEBUG] predict is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(predict, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] predict type: {type(predict)}, value: {predict}", file=__import__('sys').stderr, flush=True)
-                #     print(str(predict), file=__import__('sys').stderr, flush=True)
-                # print(f"{'='*100}\n", file=__import__('sys').stderr, flush=True)
-            scores.append({"overall": 0.0})
-            continue
-        
-        # 调用 API 评估（参考 execution.py 的实现）
-        try:
-            response = requests.post(
-                url=f"http://{gpu_ip}:8000/compute_score",
-                data={
-                    "cuda_code": cuda_code,
-                    "torch_code": torch_code,  # raw_problem 就是 torch_code
-                },
-                proxies={"http": None, "https": None},
-                timeout=120,  # 2分钟超时
-            )
-            response.raise_for_status()
-            res_json = response.json()
-            passed = res_json.get("passed", False)
-            
-            # 根据是否通过设置 reward: passed=1.0, not passed=0.0
-            reward = 1.0 if passed else 0.0
-            
-            scores.append({
-                "overall": reward,  # 这是实际使用的 reward 值
-            })
-            
-            # 打印每个样本的评估结果（每10个样本输出一次，避免日志过多）
-            sample_idx = len(scores) - 1
-            if sample_idx % 1 == 0 or sample_idx == len(predicts) - 1:  # 每10个输出一次，或最后一个样本
-                status = "✓ PASSED" if passed else "✗ FAILED"
-                print(f"[Reward Sample {sample_idx}] {status} | Reward: {reward:.4f} | "
-                      f"CUDA code length: {len(cuda_code)} chars | "
-                      f"Extracted from predict length: {len(predict)} chars", 
-                      file=__import__('sys').stderr, flush=True)
-                
-                # # 输出ground_truth（源代码）和模型推理结果
-                # print(f"\n{'='*100}", file=__import__('sys').stderr, flush=True)
-                # print(f"[Reward Sample {sample_idx}] Ground Truth (Source Code):", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # # 检查torch_code的类型和值
-                # if torch_code is None:
-                #     print("[DEBUG] torch_code is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(torch_code, str):
-                #     if len(torch_code.strip()) == 0:
-                #         print("[DEBUG] torch_code is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(torch_code, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] torch_code type: {type(torch_code)}, value: {torch_code}", file=__import__('sys').stderr, flush=True)
-                #     print(str(torch_code), file=__import__('sys').stderr, flush=True)
-                # print(f"\n[Reward Sample {sample_idx}] Model Output:", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # if predict is None:
-                #     print("[DEBUG] predict is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(predict, str):
-                #     if len(predict.strip()) == 0:
-                #         print("[DEBUG] predict is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(predict, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] predict type: {type(predict)}, value: {predict}", file=__import__('sys').stderr, flush=True)
-                #     print(str(predict), file=__import__('sys').stderr, flush=True)
-                # print(f"{'='*100}\n", file=__import__('sys').stderr, flush=True)
-                
-        except requests.exceptions.Timeout:
-            sample_idx = len(scores)
-            if sample_idx % 1 == 0 or sample_idx == len(predicts) - 1:  # 每10个输出一次，或最后一个样本
-                print(f"[Reward Sample {sample_idx}] ✗ TIMEOUT | Reward: 0.0000 | API timeout: {gpu_ip}", 
-                      file=__import__('sys').stderr, flush=True)
-                # # 输出ground_truth（源代码）和模型推理结果
-                # print(f"\n{'='*100}", file=__import__('sys').stderr, flush=True)
-                # print(f"[Reward Sample {sample_idx}] Ground Truth (Source Code):", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # # 检查torch_code的类型和值
-                # if torch_code is None:
-                #     print("[DEBUG] torch_code is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(torch_code, str):
-                #     if len(torch_code.strip()) == 0:
-                #         print("[DEBUG] torch_code is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(torch_code, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] torch_code type: {type(torch_code)}, value: {torch_code}", file=__import__('sys').stderr, flush=True)
-                #     print(str(torch_code), file=__import__('sys').stderr, flush=True)
-                # print(f"\n[Reward Sample {sample_idx}] Model Output:", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # if predict is None:
-                #     print("[DEBUG] predict is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(predict, str):
-                #     if len(predict.strip()) == 0:
-                #         print("[DEBUG] predict is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(predict, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] predict type: {type(predict)}, value: {predict}", file=__import__('sys').stderr, flush=True)
-                #     print(str(predict), file=__import__('sys').stderr, flush=True)
-                # print(f"{'='*100}\n", file=__import__('sys').stderr, flush=True)
-            scores.append({"overall": 0.0})
-        except requests.exceptions.RequestException as e:
-            sample_idx = len(scores)
-            if sample_idx % 1 == 0 or sample_idx == len(predicts) - 1:  # 每10个输出一次，或最后一个样本
-                print(f"[Reward Sample {sample_idx}] ✗ API_ERROR | Reward: 0.0000 | Error: {e}", 
-                      file=__import__('sys').stderr, flush=True)
-                # # 输出ground_truth（源代码）和模型推理结果
-                # print(f"\n{'='*100}", file=__import__('sys').stderr, flush=True)
-                # print(f"[Reward Sample {sample_idx}] Ground Truth (Source Code):", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # # 检查torch_code的类型和值
-                # if torch_code is None:
-                #     print("[DEBUG] torch_code is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(torch_code, str):
-                #     if len(torch_code.strip()) == 0:
-                #         print("[DEBUG] torch_code is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(torch_code, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] torch_code type: {type(torch_code)}, value: {torch_code}", file=__import__('sys').stderr, flush=True)
-                #     print(str(torch_code), file=__import__('sys').stderr, flush=True)
-                # print(f"\n[Reward Sample {sample_idx}] Model Output:", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # if predict is None:
-                #     print("[DEBUG] predict is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(predict, str):
-                #     if len(predict.strip()) == 0:
-                #         print("[DEBUG] predict is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(predict, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] predict type: {type(predict)}, value: {predict}", file=__import__('sys').stderr, flush=True)
-                #     print(str(predict), file=__import__('sys').stderr, flush=True)
-                # print(f"{'='*100}\n", file=__import__('sys').stderr, flush=True)
-            scores.append({"overall": 0.0})
-        except Exception as e:
-            sample_idx = len(scores)
-            if sample_idx % 1 == 0 or sample_idx == len(predicts) - 1:  # 每10个输出一次，或最后一个样本
-                print(f"[Reward Sample {sample_idx}] ✗ UNKNOWN_ERROR | Reward: 0.0000 | Error: {e}", 
-                      file=__import__('sys').stderr, flush=True)
-                # # 输出ground_truth（源代码）和模型推理结果
-                # print(f"\n{'='*100}", file=__import__('sys').stderr, flush=True)
-                # print(f"[Reward Sample {sample_idx}] Ground Truth (Source Code):", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # print(torch_code, file=__import__('sys').stderr, flush=True)
-                # print(f"\n[Reward Sample {sample_idx}] Model Output:", file=__import__('sys').stderr, flush=True)
-                # print(f"{'-'*100}", file=__import__('sys').stderr, flush=True)
-                # if predict is None:
-                #     print("[DEBUG] predict is None", file=__import__('sys').stderr, flush=True)
-                # elif isinstance(predict, str):
-                #     if len(predict.strip()) == 0:
-                #         print("[DEBUG] predict is empty string", file=__import__('sys').stderr, flush=True)
-                #     else:
-                #         print(predict, file=__import__('sys').stderr, flush=True)
-                # else:
-                #     print(f"[DEBUG] predict type: {type(predict)}, value: {predict}", file=__import__('sys').stderr, flush=True)
-                #     print(str(predict), file=__import__('sys').stderr, flush=True)
-                # print(f"{'='*100}\n", file=__import__('sys').stderr, flush=True)
-            scores.append({"overall": 0.0})
+    # 获取并发数，默认使用环境变量或默认值
+    max_workers = int(os.environ.get("REWARD_MAX_WORKERS", "128"))
+    print(f"[Reward Function] Using {max_workers} workers for parallel evaluation", 
+          file=__import__('sys').stderr, flush=True)
     
+    # 使用 ThreadPoolExecutor 并行执行
+    results = {}  # 使用字典来保持顺序
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        futures = []
+        for idx, (predict, torch_code) in enumerate(zip(predicts, ground_truths)):
+            future = executor.submit(_evaluate_single_sample, idx, predict, torch_code, gpu_ip)
+            futures.append((idx, future))
+        
+        # 收集结果（按完成顺序，但保持索引映射）
+        for idx, future in futures:
+            sample_idx, score = future.result()
+            results[sample_idx] = score
+    
+    # 按原始顺序返回结果
+    scores = [results[i] for i in range(len(predicts))]
     return scores
 
