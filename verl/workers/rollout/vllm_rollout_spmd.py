@@ -85,6 +85,7 @@ class vLLMRollout(BaseRollout):
             disable_log_stats=config.disable_log_stats,
             enforce_eager=config.enforce_eager,
             disable_custom_all_reduce=True,
+            disable_cascade_attn=True,
             # disable_mm_preprocessor_cache=True,
             enable_chunked_prefill=config.enable_chunked_prefill,
             enable_sleep_mode=True,
