@@ -1,9 +1,17 @@
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import requests
+
+
+class ThreadSafeCounter:
+    """线程安全的计数器，用于控制日志输出频率"""
+    def __init__(self):
+        self.value = 0
+        self.lock = threading.Lock()
 
 
 def extract_code_block(text: str) -> str:
@@ -28,7 +36,8 @@ def extract_code_block(text: str) -> str:
 
 
 def _evaluate_single_sample(
-    sample_idx: int, predict: str, torch_code: str, gpu_ip: str
+    sample_idx: int, predict: str, torch_code: str, gpu_ip: str, 
+    log_counter: ThreadSafeCounter, log_lock: threading.Lock
 ) -> Tuple[int, Dict[str, float]]:
     """
     评估单个样本的 CUDA 代码
@@ -38,6 +47,8 @@ def _evaluate_single_sample(
         predict: 模型生成的代码
         torch_code: PyTorch 参考代码
         gpu_ip: GPU 服务器 IP
+        log_counter: 线程安全的日志计数器
+        log_lock: 日志输出锁
         
     Returns:
         Tuple[int, Dict]: (样本索引, 得分字典)
@@ -47,9 +58,13 @@ def _evaluate_single_sample(
     
     # 如果提取失败，直接标记为失败，不发送到评估 API
     if cuda_code == "CANNOT EXTRACT CODE":
-        if sample_idx % 1 == 0:  # 每个样本都输出日志
-            print(f"[Reward Sample {sample_idx}] ✗ EXTRACT_FAILED | Reward: 0.0000 | Cannot extract code from model output", 
-                  file=__import__('sys').stderr, flush=True)
+        with log_lock:
+            log_counter.value += 1
+            current_count = log_counter.value
+            should_log = (current_count % 10 == 0) or (current_count == 1)
+            if should_log:
+                print(f"[Reward Sample {sample_idx}] ✗ EXTRACT_FAILED | Reward: 0.0000 | Count: {current_count} | Cannot extract code from model output", 
+                      file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
     
     # 调用 API 评估
@@ -69,30 +84,46 @@ def _evaluate_single_sample(
         # 根据是否通过设置 reward: passed=1.0, not passed=0.0
         reward = 1.0 if passed else 0.0
         
-        # 打印每个样本的评估结果
-        if sample_idx % 1 == 0:  # 每个样本都输出日志
-            status = "✓ PASSED" if passed else "✗ FAILED"
-            print(f"[Reward Sample {sample_idx}] {status} | Reward: {reward:.4f} | "
-                  f"CUDA code length: {len(cuda_code)} chars | "
-                  f"Extracted from predict length: {len(predict)} chars", 
-                  file=__import__('sys').stderr, flush=True)
+        # 打印每个样本的评估结果（每10条输出一次）
+        with log_lock:
+            log_counter.value += 1
+            current_count = log_counter.value
+            should_log = (current_count % 10 == 0) or (current_count == 1)
+            if should_log:
+                status = "✓ PASSED" if passed else "✗ FAILED"
+                print(f"[Reward Sample {sample_idx}] {status} | Reward: {reward:.4f} | Count: {current_count} | "
+                      f"CUDA code length: {len(cuda_code)} chars | "
+                      f"Extracted from predict length: {len(predict)} chars", 
+                      file=__import__('sys').stderr, flush=True)
         
         return sample_idx, {"overall": reward}
         
     except requests.exceptions.Timeout:
-        if sample_idx % 10 == 0:  # 每个样本都输出日志
-            print(f"[Reward Sample {sample_idx}] ✗ TIMEOUT | Reward: 0.0000 | API timeout: {gpu_ip}", 
-                  file=__import__('sys').stderr, flush=True)
+        with log_lock:
+            log_counter.value += 1
+            current_count = log_counter.value
+            should_log = (current_count % 10 == 0) or (current_count == 1)
+            if should_log:
+                print(f"[Reward Sample {sample_idx}] ✗ TIMEOUT | Reward: 0.0000 | Count: {current_count} | API timeout: {gpu_ip}", 
+                      file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
     except requests.exceptions.RequestException as e:
-        if sample_idx % 10 == 0:  # 每个样本都输出日志
-            print(f"[Reward Sample {sample_idx}] ✗ API_ERROR | Reward: 0.0000 | Error: {e}", 
-                  file=__import__('sys').stderr, flush=True)
+        with log_lock:
+            log_counter.value += 1
+            current_count = log_counter.value
+            should_log = (current_count % 10 == 0) or (current_count == 1)
+            if should_log:
+                print(f"[Reward Sample {sample_idx}] ✗ API_ERROR | Reward: 0.0000 | Count: {current_count} | Error: {e}", 
+                      file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
     except Exception as e:
-        if sample_idx % 10 == 0:  # 每个样本都输出日志
-            print(f"[Reward Sample {sample_idx}] ✗ UNKNOWN_ERROR | Reward: 0.0000 | Error: {e}", 
-                  file=__import__('sys').stderr, flush=True)
+        with log_lock:
+            log_counter.value += 1
+            current_count = log_counter.value
+            should_log = (current_count % 10 == 0) or (current_count == 1)
+            if should_log:
+                print(f"[Reward Sample {sample_idx}] ✗ UNKNOWN_ERROR | Reward: 0.0000 | Count: {current_count} | Error: {e}", 
+                      file=__import__('sys').stderr, flush=True)
         return sample_idx, {"overall": 0.0}
 
 
@@ -120,11 +151,19 @@ def compute_score(predicts: List[str], ground_truths: List[str]) -> List[Dict[st
     
     # 使用 ThreadPoolExecutor 并行执行
     results = {}  # 使用字典来保持顺序
+    
+    # 创建线程安全的日志计数器（用于控制每10条输出一次）
+    log_counter = ThreadSafeCounter()
+    log_lock = threading.Lock()
+    
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有任务
         futures = []
         for idx, (predict, torch_code) in enumerate(zip(predicts, ground_truths)):
-            future = executor.submit(_evaluate_single_sample, idx, predict, torch_code, gpu_ip)
+            future = executor.submit(
+                _evaluate_single_sample, idx, predict, torch_code, gpu_ip, 
+                log_counter, log_lock
+            )
             futures.append((idx, future))
         
         # 收集结果（按完成顺序，但保持索引映射）

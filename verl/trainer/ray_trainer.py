@@ -22,6 +22,7 @@ import uuid
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum, IntEnum, auto
 from typing import Any, Dict, List, Optional, Type
 
@@ -466,22 +467,13 @@ class RayPPOTrainer:
         self.logger = Tracker(loggers=self.config.trainer.logger, config=self.config.to_dict())
         self.global_step = 0
         val_metrics: Optional[Dict[str, Any]] = None
-
-        # load checkpoint before doing anything
         self._load_checkpoint()
         
-        # Adjust training_steps if loading from checkpoint
-        # If max_steps is set, it means "total steps from start", so we need to adjust
-        # based on current global_step after loading checkpoint
+      
         if self.config.trainer.max_steps is not None and self.global_step > 0:
-            # If we loaded from checkpoint, max_steps should be relative to the checkpoint
-            # So training_steps = checkpoint_step + max_steps
-            # But if user wants "total steps", we keep it as is
-            # For now, we'll use absolute step count: if global_step already exceeds training_steps, stop immediately
-            pass  # Keep original logic: training_steps is absolute
+            pass  
 
-        # perform validation before training
-        # currently, we only support validation using the reward_function.
+
         if self.val_reward_fn is not None and self.config.trainer.val_before_train:
             val_metrics = self._validate()
             self.logger.log(data=val_metrics, step=self.global_step)
@@ -493,30 +485,50 @@ class RayPPOTrainer:
             print(f"Training already completed: global_step={self.global_step} >= training_steps={self.training_steps}", file=sys.stderr, flush=True)
             return
         
-        # Print training start info to stderr (goes to .err file)
+        # Print training configuration before training
         print(f"\n{'='*60}", file=sys.stderr, flush=True)
-        print(f"Starting training: {self.training_steps} total steps, {self.config.trainer.total_epochs} epochs", file=sys.stderr, flush=True)
-        print(f"Current step: {self.global_step}", file=sys.stderr, flush=True)
+        print("Training Configuration:", file=sys.stderr, flush=True)
+        print(f"  Experiment name: {self.config.trainer.experiment_name}", file=sys.stderr, flush=True)
+        print(f"  Total epochs: {self.config.trainer.total_epochs}", file=sys.stderr, flush=True)
+        print(f"  Max steps: {self.config.trainer.max_steps}", file=sys.stderr, flush=True)
+        print(f"  Training steps: {self.training_steps}", file=sys.stderr, flush=True)
+        print(f"  Save frequency: {self.config.trainer.save_freq}", file=sys.stderr, flush=True)
+        print(f"  Save checkpoint path: {self.config.trainer.save_checkpoint_path}", file=sys.stderr, flush=True)
+        print(f"  Load checkpoint path: {self.config.trainer.load_checkpoint_path}", file=sys.stderr, flush=True)
+        print(f"  Current step: {self.global_step}", file=sys.stderr, flush=True)
+        print(f"  Rollout batch size: {self.config.data.rollout_batch_size}", file=sys.stderr, flush=True)
+        print(f"  Actor global batch size: {self.config.worker.actor.global_batch_size}", file=sys.stderr, flush=True)
+        print(f"  Use critic: {self.use_critic}", file=sys.stderr, flush=True)
+        print(f"  Use reference policy: {self.use_reference_policy}", file=sys.stderr, flush=True)
+        print(f"  Advantage estimator: {self.config.algorithm.adv_estimator}", file=sys.stderr, flush=True)
         print(f"{'='*60}\n", file=sys.stderr, flush=True)
         
-        # Use simple iteration without tqdm to avoid duplicate outputs in Ray environment
-        # Progress will be printed after each step completion
-        for epoch_idx in range(self.config.trainer.total_epochs):
-            for batch_dict in self.train_dataloader:
-                self.global_step += 1
-                # Use >= instead of > to stop when reaching exactly training_steps
-                if self.global_step > self.training_steps:
-                    print(f"Training completed: reached max_steps={self.training_steps} at global_step={self.global_step}", file=sys.stderr, flush=True)
-                    # Always save the last completed step before exiting
-                    # The last completed step is (global_step - 1)
-                    last_completed_step = self.global_step - 1
-                    print(f"Saving final checkpoint at global_step={last_completed_step}...", file=sys.stderr, flush=True)
-                    # Temporarily set global_step back to the last completed step for saving
-                    self.global_step = last_completed_step
-                    self._save_checkpoint()
-                    return
 
-                metrics, timing_raw = {}, {}
+        try:
+            for epoch_idx in range(self.config.trainer.total_epochs):
+                for batch_dict in self.train_dataloader:
+                    self.global_step += 1
+                    # Use >= instead of > to stop when reaching exactly training_steps
+                    if self.global_step > self.training_steps:
+                        print(f"Training completed: reached max_steps={self.training_steps} at global_step={self.global_step}", file=sys.stderr, flush=True)
+                        last_completed_step = self.global_step - 1
+                        should_save_final = (
+                            self.config.trainer.save_freq <= 0 
+                            or last_completed_step % self.config.trainer.save_freq != 0
+                        )
+                        if should_save_final:
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            print(f"[{timestamp}] Saving final checkpoint at global_step={last_completed_step}...", file=sys.stderr, flush=True)
+                            # Temporarily set global_step back to the last completed step for saving
+                            self.global_step = last_completed_step
+                            self._save_checkpoint()
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            print(f"[{timestamp}] Final checkpoint saved successfully.", file=sys.stderr, flush=True)
+                        else:
+                            print(f"Checkpoint already saved at step {last_completed_step} (save_freq={self.config.trainer.save_freq}), skipping duplicate save.", file=sys.stderr, flush=True)
+                        return
+
+                    metrics, timing_raw = {}, {}
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
 
                 # pop those keys for generation
@@ -596,12 +608,6 @@ class RayPPOTrainer:
                         reward_tensor, reward_metrics_raw = ray.get(reward_ref)
                         batch.batch["token_level_scores"] = reward_tensor
                         
-                        # 输出每个样本的 reward（已禁用，避免日志过多）
-                        # if "overall" in reward_metrics_raw and len(reward_metrics_raw["overall"]) > 0:
-                        #     print(f"[Step {self.global_step}] Per-sample Rewards:", file=sys.stderr, flush=True)
-                        #     for i, reward_val in enumerate(reward_metrics_raw["overall"]):
-                        #         print(f"  Sample {i}: reward={reward_val:.4f}", file=sys.stderr, flush=True)
-                        
                         reward_metrics = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics_raw).items()}
                         metrics.update(reward_metrics)
                         
@@ -609,7 +615,8 @@ class RayPPOTrainer:
                         if reward_metrics:
                             reward_summary = ", ".join([f"{k}={v:.7f}" if isinstance(v, (int, float)) else f"{k}={v}" 
                                                        for k, v in reward_metrics.items()])
-                            print(f"[Step {self.global_step}] Reward Metrics (batch mean): {reward_summary}", file=sys.stderr, flush=True)
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            print(f"[{timestamp}] [Step {self.global_step}] Reward Metrics (batch mean): {reward_summary}", file=sys.stderr, flush=True)
 
                         # apply kl penalty if available
                         if not self.config.algorithm.use_kl_loss and self.use_reference_policy:
@@ -655,8 +662,12 @@ class RayPPOTrainer:
                         metrics.update(val_metrics)
 
                     if self.config.trainer.save_freq > 0 and self.global_step % self.config.trainer.save_freq == 0:
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"[{timestamp}] [Step {self.global_step}] Saving checkpoint...", file=sys.stderr, flush=True)
                         with timer("save_checkpoint", timing_raw):
                             self._save_checkpoint()
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"[{timestamp}] [Step {self.global_step}] Checkpoint saved successfully.", file=sys.stderr, flush=True)
 
                 # collect metrics
                 num_gpus = self.resource_pool_manager.get_num_gpus()
@@ -687,11 +698,26 @@ class RayPPOTrainer:
                         break
                 
                 # Format output: Step | Epoch | Loss | Reward
+                # Format loss with adaptive precision: use scientific notation for very small values
+                def format_loss(loss_val):
+                    """Format loss value with appropriate precision."""
+                    if loss_val is None:
+                        return "None"
+                    abs_loss = abs(loss_val)
+                    if abs_loss == 0.0:
+                        return "0.00000000"
+                    elif abs_loss < 0.0001:
+                        # Use scientific notation for very small values
+                        return f"{loss_val:.6e}"
+                    else:
+                        # Use fixed decimal places for larger values
+                        return f"{loss_val:.8f}"
+                
                 if total_loss is not None and total_reward is not None:
-                    print(f"Step {self.global_step}/{self.training_steps} | Epoch {epoch_idx + 1}/{self.config.trainer.total_epochs} | Loss: {total_loss:.4f} | Reward: {total_reward:.4f}", 
+                    print(f"Step {self.global_step}/{self.training_steps} | Epoch {epoch_idx + 1}/{self.config.trainer.total_epochs} | Loss: {format_loss(total_loss)} | Reward: {total_reward:.4f}", 
                           file=sys.stderr, flush=True)
                 elif total_loss is not None:
-                    print(f"Step {self.global_step}/{self.training_steps} | Epoch {epoch_idx + 1}/{self.config.trainer.total_epochs} | Loss: {total_loss:.4f}", 
+                    print(f"Step {self.global_step}/{self.training_steps} | Epoch {epoch_idx + 1}/{self.config.trainer.total_epochs} | Loss: {format_loss(total_loss)}", 
                           file=sys.stderr, flush=True)
                 elif total_reward is not None:
                     print(f"Step {self.global_step}/{self.training_steps} | Epoch {epoch_idx + 1}/{self.config.trainer.total_epochs} | Reward: {total_reward:.4f}", 
@@ -701,31 +727,25 @@ class RayPPOTrainer:
                     print(f"Step {self.global_step}/{self.training_steps} | Epoch {epoch_idx + 1}/{self.config.trainer.total_epochs} completed", 
                           file=sys.stderr, flush=True)
 
-        # perform validation after training
-        if self.val_reward_fn is not None:
-            if (
-                val_metrics is None
-                or self.config.trainer.val_freq <= 0
-                or self.global_step % self.config.trainer.val_freq != 0
-            ):
-                val_metrics = self._validate()
-                self.logger.log(data=val_metrics, step=self.global_step)
 
-            print(f"Final validation metrics: {convert_dict_to_str(val_metrics)}", file=sys.stderr, flush=True)
-
-        if self.config.trainer.save_freq <= 0 or self.global_step % self.config.trainer.save_freq != 0:
-            self._save_checkpoint()
-
-        # Clean up distributed process groups to avoid NCCL warnings
-        print("Cleaning up distributed process groups...", file=sys.stderr, flush=True)
-        try:
-            for wg_dict in self.wg_dicts:
-                # Get all worker groups from the wg_dict
-                if hasattr(wg_dict, '_workers'):
-                    for worker in wg_dict._workers:
-                        try:
-                            worker.cleanup.remote()
-                        except Exception as e:
-                            print(f"Warning: Failed to cleanup worker: {e}", file=sys.stderr, flush=True)
-        except Exception as e:
-            print(f"Warning: Failed to cleanup worker groups: {e}", file=sys.stderr, flush=True)
+            if self.config.trainer.save_freq <= 0 or self.global_step % self.config.trainer.save_freq != 0:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{timestamp}] Saving final checkpoint at global_step={self.global_step}...", file=sys.stderr, flush=True)
+                self._save_checkpoint()
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{timestamp}] Final checkpoint saved successfully.", file=sys.stderr, flush=True)
+        finally:
+            # Clean up distributed process groups to avoid NCCL warnings
+            # This will always execute, even if training exits early via return
+            print("Cleaning up distributed process groups...", file=sys.stderr, flush=True)
+            try:
+                for wg_dict in self.wg_dicts:
+                    # Get all worker groups from the wg_dict
+                    if hasattr(wg_dict, '_workers'):
+                        for worker in wg_dict._workers:
+                            try:
+                                worker.cleanup.remote()
+                            except Exception as e:
+                                print(f"Warning: Failed to cleanup worker: {e}", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"Warning: Failed to cleanup worker groups: {e}", file=sys.stderr, flush=True)

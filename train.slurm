@@ -118,7 +118,7 @@ unset NO_PROXY
 echo -e "\033[31m[×] 已关闭代理\033[0m"
 
 # 设置环境变量（在 Ray 启动之前设置，以便传递给 worker 进程）
-export CUDA_SERVER_IP="10.200.198.13"
+export CUDA_SERVER_IP="10.200.198.10"
 export REWARD_MAX_WORKERS=128  
 
 ray stop --force
