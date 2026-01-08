@@ -125,6 +125,6 @@ ray stop --force
 ray start --head
 
 # 启动脚本
-bash scripts/main.sh /nfs_global/S/fangzixiang/train_model/Qwen2.5-Coder-7B-Instruct-CUDA-speedup/full/speed_up_batch_234/checkpoint-606/ qwen2.5-coder-7b-instruct_speedup
+bash scripts/main.sh /nfs_global/S/fangzixiang/train_model/Qwen2.5-Coder-7B-Instruct-CUDA-speedup/full/speed_up_batch_234/checkpoint-606/ qwen2.5-coder-7b-instruct_speedup_update
 
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"

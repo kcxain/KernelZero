@@ -81,8 +81,42 @@ def _evaluate_single_sample(
         res_json = response.json()
         passed = res_json.get("passed", False)
         
-        # 根据是否通过设置 reward: passed=1.0, not passed=0.0
-        reward = 1.0 if passed else 0.0
+        # 根据是否通过设置 reward
+        # 如果通过：reward = 1 + speedup * 0.5
+        # 如果失败：reward = 0.0
+        speedup = 0.0
+        if passed:
+            # 从 API 返回中提取 speedup
+            # 参考 keck/app/main.py 和 keck/app/helper.py
+            # 当 passed=True 时，msg 可能是字典（包含 speedup）或字符串（需要解析）
+            if "msg" in res_json:
+                msg = res_json["msg"]
+                # 方式1: 如果 msg 是字典，直接提取 speedup
+                if isinstance(msg, dict) and "speedup" in msg:
+                    try:
+                        speedup = float(msg["speedup"])
+                    except (ValueError, TypeError):
+                        speedup = 0.0
+                # 方式2: 如果 msg 是字符串，使用正则表达式解析
+                elif isinstance(msg, str):
+                    # 使用正则表达式从 msg 中提取 speedup: "Torch time: Xs, CUDA time: Ys, Speedup: Zx"
+                    speedup_match = re.search(
+                        r"Torch time:\s*[\d.]+\s*s,\s*CUDA time:\s*[\d.]+\s*s,\s*Speedup:\s*([\d.]+)x",
+                        msg,
+                    )
+                    if speedup_match:
+                        try:
+                            speedup = float(speedup_match.group(1))
+                        except (ValueError, TypeError):
+                            speedup = 0.0
+            
+            # 限制 speedup 最大值为 2
+            if speedup > 2.0:
+                speedup = 2.0
+            
+            reward = 1.0 + speedup * 0.5
+        else:
+            reward = 0.0
         
         # 打印每个样本的评估结果（每10条输出一次）
         with log_lock:
@@ -91,7 +125,8 @@ def _evaluate_single_sample(
             should_log = (current_count % 10 == 0) or (current_count == 1)
             if should_log:
                 status = "✓ PASSED" if passed else "✗ FAILED"
-                print(f"[Reward Sample {sample_idx}] {status} | Reward: {reward:.4f} | Count: {current_count} | "
+                speedup_str = f" | Speedup: {speedup:.2f}x" if passed and speedup > 0 else ""
+                print(f"[Reward Sample {sample_idx}] {status} | Reward: {reward:.4f}{speedup_str} | Count: {current_count} | "
                       f"CUDA code length: {len(cuda_code)} chars | "
                       f"Extracted from predict length: {len(predict)} chars", 
                       file=__import__('sys').stderr, flush=True)
@@ -132,7 +167,15 @@ def compute_score(predicts: List[str], ground_truths: List[str]) -> List[Dict[st
     计算生成的 CUDA 代码的得分（并行版本）
     
     参考 fs-eval/fs_eval/refine_sampler.py 的并行实现方式
-    使用 ThreadPoolExecutor 并行调用 API 评估，如果 passed 则 reward=1.0，否则 reward=0.0
+    使用 ThreadPoolExecutor 并行调用 API 评估
+    
+    Reward 计算规则：
+    - 如果 passed=True: reward = 1 + speedup * 0.5
+    - 如果 passed=False: reward = 0.0
+    
+    speedup 从 API 返回中提取：
+    - 优先从 res_json["result"]["speedup"] 提取（如果 result 是 dict）
+    - 否则从 res_json["msg"] 字符串中通过正则表达式解析
     
     Args:
         predicts: 模型生成的代码列表（包含 CUDA 代码）
