@@ -744,8 +744,16 @@ class RayPPOTrainer:
                     if hasattr(wg_dict, '_workers'):
                         for worker in wg_dict._workers:
                             try:
-                                worker.cleanup.remote()
+                                # Use getattr to safely check for cleanup method
+                                cleanup_method = getattr(worker, 'cleanup', None)
+                                if cleanup_method is not None:
+                                    cleanup_method.remote()
+                            except AttributeError:
+                                # Worker doesn't have cleanup method, skip silently
+                                pass
                             except Exception as e:
-                                print(f"Warning: Failed to cleanup worker: {e}", file=sys.stderr, flush=True)
+                                # Only log non-AttributeError exceptions
+                                if "'ActorHandle' object has no attribute 'cleanup'" not in str(e):
+                                    print(f"Warning: Failed to cleanup worker: {e}", file=sys.stderr, flush=True)
             except Exception as e:
                 print(f"Warning: Failed to cleanup worker groups: {e}", file=sys.stderr, flush=True)

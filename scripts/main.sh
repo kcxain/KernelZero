@@ -1,6 +1,8 @@
 Base_model=$1
 Model_abbr=$2
 
+set -e
+
 # echo "Model_abbr: $Model_abbr"
 # # Initialize first iteration with base model
 # bash scripts/questioner_train_penalty.sh  $Base_model $Base_model ${Model_abbr}_questioner_v1
