@@ -3,7 +3,7 @@ import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any
 
 import requests
 import numpy as np
@@ -46,11 +46,23 @@ def _log_sample_result(result: Dict[str, Any] = None, error: Exception = None, e
                 passed = result.get("passed", False)
                 speedup = result.get("msg", {}).get("speedup", -1)
                 speedup_str = f"{speedup:.2f}x" if speedup > 0 else "N/A"
-                print(
-                    f"Sample {_score_counter}: formated={formated}, compiled={compiled}, "
-                    f"passed={passed}, speedup={speedup_str}",
-                    file=sys.stderr, flush=True
-                )
+                error_msg = result.get("error_msg", None)
+                
+                # 如果 passed=False，输出错误信息
+                if not passed and error_msg:
+                    # 截断过长的错误信息（保留前200个字符）
+                    error_display = error_msg[:200] + "..." if len(error_msg) > 200 else error_msg
+                    print(
+                        f"Sample {_score_counter}: formated={formated}, compiled={compiled}, "
+                        f"passed={passed}, speedup={speedup_str}, error={error_display}",
+                        file=sys.stderr, flush=True
+                    )
+                else:
+                    print(
+                        f"Sample {_score_counter}: formated={formated}, compiled={compiled}, "
+                        f"passed={passed}, speedup={speedup_str}",
+                        file=sys.stderr, flush=True
+                    )
 
 
 def extract_code_block(text: str) -> str:
@@ -95,7 +107,8 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
             "formated": 0.0,
             "compiled": 0.0,
             "passed": False,
-            "msg": {"speedup": -1}
+            "msg": {"speedup": -1},
+            "error_msg": "CANNOT EXTRACT CODE"
         }
         
 
@@ -122,8 +135,27 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
         compiled = 1.0 if res_json.get("compiled", False) else 0.0
         passed = res_json.get("passed", False)
         
-        # 提取speedup
+        # 提取speedup和错误信息
         msg = res_json.get("msg", {})
+        
+        # 提取错误信息（仅在 passed=False 时）
+        error_msg = None
+        if not passed:
+            # 优先从 error 字段获取错误信息
+            error_msg = res_json.get("error", None)
+            if error_msg is None:
+                # 如果 error 字段不存在，尝试从 msg 字段获取错误信息
+                if isinstance(msg, str):
+                    # 如果 msg 是字符串，可能包含错误信息
+                    # 检查是否包含错误关键词
+                    if any(keyword in msg.lower() for keyword in ["error", "failed", "exception", "traceback"]):
+                        error_msg = msg
+                    # 如果 msg 中没有 speedup 信息，可能是错误信息
+                    elif "speedup" not in msg.lower() and "torch time" not in msg.lower():
+                        error_msg = msg
+                elif isinstance(msg, dict):
+                    # 如果 msg 是字典，尝试获取 error 字段
+                    error_msg = msg.get("error", None)
         if isinstance(msg, dict):
             speedup = msg.get("speedup", -1)
         elif isinstance(msg, str):
@@ -146,7 +178,8 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
             "formated": formated,
             "compiled": compiled,
             "passed": passed,
-            "msg": {"speedup": speedup}
+            "msg": {"speedup": speedup},
+            "error_msg": error_msg
         }
         
 
@@ -159,7 +192,8 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
             "formated": 0.0,
             "compiled": 0.0,
             "passed": False,
-            "msg": {"speedup": -1}
+            "msg": {"speedup": -1},
+            "error_msg": str(e)
         }
         
 
@@ -172,7 +206,6 @@ def compute_score(
     solution_strs: List[str], 
     ground_truths: List[str], 
     index: List[int],
-    dataset_index: Optional[List[int]] = None,
     alpha: float = 0.5,
     penalty_weight: float = 1.0
 ) -> List[Dict[str, Any]]:
@@ -183,7 +216,6 @@ def compute_score(
         solution_strs: 模型生成的代码列表（包含 CUDA 代码）
         ground_truths: PyTorch 参考代码列表
         index: 分组索引列表（uid）
-        dataset_index: 全局数据集索引列表，用于日志显示
         alpha: 正确样本比例阈值，默认0.5
         penalty_weight: speedup奖励权重，默认1.0
         
@@ -218,7 +250,6 @@ def compute_score(
     # 按index分组处理
     group_ids = []
     grouped_data = {}
-    group_dataset_index = {}  # 保存每个组的全局索引
     for i, idx in enumerate(index):
         if idx not in group_ids:
             group_ids.append(idx)
@@ -229,11 +260,6 @@ def compute_score(
                 "passed": [],
                 "speedup": [],
             }
-            # 保存该组的全局索引（使用第一个样本的索引）
-            if dataset_index is not None and i < len(dataset_index):
-                group_dataset_index[idx] = dataset_index[i]
-            else:
-                group_dataset_index[idx] = -1
         grouped_data[idx]["formated"].append(formated[i])
         grouped_data[idx]["compiled"].append(compiled[i])
         grouped_data[idx]["passed"].append(passed[i])
@@ -307,21 +333,6 @@ def compute_score(
                 scores.append(float(score))
             id2scores[idx] = scores
 
-        # 获取全局索引用于日志显示
-        global_idx = group_dataset_index.get(idx, -1)
-        if global_idx >= 0:
-            print(
-                f"Question[{global_idx}]  Scores: {scores}, Formated: {group_formated}, Compiled: {group_compiled}, "
-                f"Passed: {group_passed}, Speedup: {group_speedup}",
-                file=sys.stderr, flush=True
-            )
-        else:
-            print(
-                f"Question[?]  Scores: {scores}, Formated: {group_formated}, Compiled: {group_compiled}, "
-                f"Passed: {group_passed}, Speedup: {group_speedup}",
-                file=sys.stderr, flush=True
-            )
-    
     # 构建返回结果
     res = []
     for i, idx in enumerate(index):
