@@ -14,6 +14,7 @@
 
 import json
 import os
+import sys
 import ray
 import torch
 import numpy as np
@@ -23,6 +24,7 @@ from ..single_controller.ray import RayWorkerGroup
 from ..utils.tokenizer import get_processor, get_tokenizer
 from ..workers.fsdp_workers import FSDPWorker
 from ..workers.reward import BatchFunctionRewardManager, SequentialFunctionRewardManager
+from ..protocol import DataProto, pad_dataproto_to_divisor, unpad_dataproto
 from .config import PPOConfig
 from .data_loader import create_dataloader
 from .ray_trainer import RayPPOTrainer, ResourcePoolManager, Role
@@ -82,42 +84,7 @@ class Runner:
 
         train_dataloader, val_dataloader = create_dataloader(config.data, tokenizer, processor)
 
-        # 输出一条数据的原始数据和 message 数据，用于检查数据加载是否正确
-        # print("\n" + "="*80)
-        # print("检查数据加载：输出第一条样本的原始数据和构造的 messages")
-        # print("="*80)
-        
-        # # 从 dataloader 获取第一条数据
-        # sample = next(iter(train_dataloader))
-        
-        # # 获取原始数据（从 dataset 的底层数据集）
-        # train_dataset = train_dataloader.dataset
-        # if hasattr(train_dataset, 'dataset') and len(train_dataset.dataset) > 0:
-        #     raw_example = train_dataset.dataset[0]
-        #     print("\n【原始数据 (raw_example)】")
-        #     print(json.dumps(raw_example, indent=2, ensure_ascii=False, default=str))
-            
-        #     # 构造 messages
-        #     messages = train_dataset._build_messages(raw_example)
-        #     print("\n【构造的 Messages】")
-        #     print(json.dumps(messages, indent=2, ensure_ascii=False, default=str))
-        
-        # # 输出处理后的数据样本（包含 input_ids, ground_truth 等）
-        # print("\n【处理后的样本数据 (sample)】")
-        # print(f"Keys in sample: {list(sample.keys())}")
-        
-        # # 输出 ground_truth（对于 kernelbench 应该是 raw_problem）
-        # if "ground_truth" in sample:
-        #     ground_truth = sample["ground_truth"]
-        #     # 处理 numpy array 或 list/tuple
-        #     if isinstance(ground_truth, np.ndarray):
-        #         ground_truth = ground_truth.tolist()
-        #     if isinstance(ground_truth, (list, tuple)) and len(ground_truth) > 0:
-        #         gt_val = ground_truth[0] if isinstance(ground_truth[0], str) else str(ground_truth[0])
-        #         print(f"\n【ground_truth (第一条)】")
-        #         print(f"Type: {type(ground_truth[0])}")
-        #         print(f"Length: {len(gt_val)} characters" if isinstance(gt_val, str) else "N/A")
-        #         print(f"Content (前500字符):\n{gt_val[:500]}..." if isinstance(gt_val, str) and len(gt_val) > 500 else gt_val)
+        # 初始化trainer
         trainer = RayPPOTrainer(
             config=config,
             tokenizer=tokenizer,

@@ -347,6 +347,8 @@ class RLHFDataset(Dataset):
         example["attention_mask"] = attention_mask
         example["position_ids"] = position_ids
         example["raw_prompt_ids"] = raw_prompt_ids
+        # 保存原始数据集索引，用于全局索引追踪
+        example["dataset_index"] = index
         
         # 设置 ground_truth：如果是 kernelbench 格式（包含 "PyTorch and CUDA"），使用 raw_problem；否则使用 answer_key
         if self.format_prompt and "PyTorch and CUDA" in self.format_prompt:
