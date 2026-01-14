@@ -99,6 +99,7 @@ class BatchFunctionRewardManager(FunctionRewardManager):
 
     def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
         response_str, ground_truth, index = [], [], []
+        dataset_index = []
         response_ids = data.batch["responses"]
         response_length = data.batch["response_mask"].sum(dim=-1)
         for i in range(len(data)):
@@ -108,8 +109,13 @@ class BatchFunctionRewardManager(FunctionRewardManager):
             )
             ground_truth.append(data.non_tensor_batch["ground_truth"][i])
             index.append(data.non_tensor_batch["uid"][i])
+            # 获取原始数据集索引（如果存在）
+            if "dataset_index" in data.non_tensor_batch:
+                dataset_index.append(data.non_tensor_batch["dataset_index"][i])
+            else:
+                dataset_index.append(-1)  # 如果不存在，使用-1作为占位符
 
-        scores = self.reward_fn(response_str, ground_truth, index)
+        scores = self.reward_fn(response_str, ground_truth, index, dataset_index)
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_metrics = defaultdict(list)
         for i, score in enumerate(scores):

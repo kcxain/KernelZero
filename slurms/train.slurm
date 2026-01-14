@@ -118,14 +118,15 @@ unset NO_PROXY
 echo -e "\033[31m[×] 已关闭代理\033[0m"
 
 # 设置环境变量（在 Ray 启动之前设置，以便传递给 worker 进程）
-export CUDA_SERVER_IP="10.200.198.13"
+export CUDA_SERVER_IP="10.200.198.12"
 export REWARD_MAX_WORKERS=128  
+
 
 ray stop --force
 ray start --head
 
 # 启动脚本
-bash scripts/main.sh /nfs_global/S/fangzixiang/train_model/Qwen2.5-Coder-7B-Instruct-CUDA-speedup/full/speed_up_batch_234/checkpoint-606/ qwen2.5-coder-7b-instruct_speedup_update
-# 测试用
+bash scripts/main.sh /nfs_global/S/fangzixiang/train_model/R-zero/test/models/qwen2.5-coder-7b-instruct_speedup_update_solver_v1/global_step_6_2ops/actor/huggingface qwen2.5-coder-7b-instruct_speedup_update
+# 测试用 vcbv
 #bash scripts/main.sh /share/collab/codemodel/models/Qwen/Qwen2.5-Coder-1.5B-Instruct qwen2.5-coder-1.5b-instruct
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"

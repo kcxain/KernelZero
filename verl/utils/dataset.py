@@ -160,8 +160,8 @@ class RLHFDataset(Dataset):
         if self.format_prompt and "PyTorch and CUDA" in self.format_prompt:
             # kernelbench 模板使用 raw_problem 字段作为输入，变量名为 py_code
             # 参考 fs-eval/fs_eval/prompt_builder.py 的构造方式
-            if "raw_problem" in example:
-                py_code = example["raw_problem"]
+            if "code" in example:
+                py_code = example["code"]
                 format_prompt = Template(self.format_prompt.strip())
                 
                 # 导入 GPU_SPEC_INFO 和 softmax_example（与 fs-eval 保持一致）
@@ -347,12 +347,14 @@ class RLHFDataset(Dataset):
         example["attention_mask"] = attention_mask
         example["position_ids"] = position_ids
         example["raw_prompt_ids"] = raw_prompt_ids
+        # 保存原始数据集索引（用于日志显示和追踪）
+        example["dataset_index"] = index
         
         # 设置 ground_truth：如果是 kernelbench 格式（包含 "PyTorch and CUDA"），使用 raw_problem；否则使用 answer_key
         if self.format_prompt and "PyTorch and CUDA" in self.format_prompt:
             # 对于 kernelbench，ground_truth 应该是 raw_problem（torch 代码）
-            if "raw_problem" in example:
-                example["ground_truth"] = example["raw_problem"]
+            if "code" in example:
+                example["ground_truth"] = example["code"]
             else:
                 # 如果没有 raw_problem，尝试使用 answer_key
                 example["ground_truth"] = example.pop(self.answer_key, "")
