@@ -106,7 +106,8 @@ class vLLMRollout(BaseRollout):
                 continue
             if hasattr(default_sampling_params, key):
                 sampling_kwargs[key] = getattr(config, key)
-        print(f"Sampling params: {sampling_kwargs}.")
+        print(f"Sampling params: {sampling_kwargs}.", file=__import__('sys').stderr, flush=True)
+        print(f"Max tokens (response_length): {config.response_length}", file=__import__('sys').stderr, flush=True)
         self.sampling_params = SamplingParams(**sampling_kwargs)
 
     @contextmanager

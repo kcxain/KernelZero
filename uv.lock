@@ -728,7 +728,11 @@ wheels = [
 [[package]]
 name = "flash-attn"
 version = "2.7.4.post1"
+<<<<<<< HEAD
 source = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl" }
+=======
+source = { path = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl" }
+>>>>>>> master
 dependencies = [
     { name = "einops" },
     { name = "torch" },
@@ -1460,7 +1464,11 @@ requires-dist = [
     { name = "fastapi-cli", specifier = "==0.0.7" },
     { name = "fastrlock", specifier = "==0.8.3" },
     { name = "filelock", specifier = "==3.18.0" },
+<<<<<<< HEAD
     { name = "flash-attn", url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl" },
+=======
+    { name = "flash-attn", path = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl" },
+>>>>>>> master
     { name = "flask", specifier = "==3.1.1" },
     { name = "fonttools", specifier = "==4.58.2" },
     { name = "frozenlist", specifier = "==1.7.0" },
