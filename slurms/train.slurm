@@ -2,9 +2,9 @@
 
 #- Job parameters
 
-#SBATCH -J R-Zero                  # The job name
-#SBATCH -o logs/R-Zero-%j.out         # Write the standard output to file named 'train-<job_number>.out'
-#SBATCH -e logs/R-Zero-%j.err         # Write the standard error to file named 'train-<job_number>.err'
+#SBATCH -J torch_generate_v0                  # The job name
+#SBATCH -o logs/torch_generate_v0-%j.out         # Write the standard output to file named 'train-<job_number>.out'
+#SBATCH -e logs/torch_generate_v0-%j.err         # Write the standard error to file named 'train-<job_number>.err'
 
 
 #- Resources
@@ -67,7 +67,7 @@ export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 #- storage path
-export STORAGE_PATH=/nfs_global/S/fangzixiang/train_model/R-zero/test
+export STORAGE_PATH=./train_model/kernelzero/v0
 #  建立存储文件
 mkdir -p \
   "$STORAGE_PATH/evaluation" \
@@ -77,26 +77,26 @@ mkdir -p \
 
 ##- virtualenv
 # 初始化 conda（如果尚未初始化）
-if [ -f "/workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh" ]; then
-    source /workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh
-elif [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
-    source $HOME/miniconda/etc/profile.d/conda.sh
-fi
+# if [ -f "/workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh" ]; then
+#     source /workspace/S/fangzixiang/miniconda/etc/profile.d/conda.sh
+# elif [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
+#     source $HOME/miniconda/etc/profile.d/conda.sh
+# fi
 
-# 激活 conda 环境
-conda activate r-zero || {
-    echo "✗ Failed to activate conda environment 'r-zero'. Exiting."
-    exit 1
-}
+# # 激活 conda 环境
+# conda activate r-zero || {
+#     echo "✗ Failed to activate conda environment 'r-zero'. Exiting."
+#     exit 1
+# }
 
-# 验证 conda 环境是否成功激活
-if [ -z "$CONDA_DEFAULT_ENV" ]; then
-    echo "✗ Warning: Conda environment may not be activated properly."
-    echo "Current Python: $(which python)"
-else
-    echo "✓ Conda environment activated: $CONDA_DEFAULT_ENV"
-    echo "✓ Python path: $(which python)"
-fi
+# # 验证 conda 环境是否成功激活
+# if [ -z "$CONDA_DEFAULT_ENV" ]; then
+#     echo "✗ Warning: Conda environment may not be activated properly."
+#     echo "Current Python: $(which python)"
+# else
+#     echo "✓ Conda environment activated: $CONDA_DEFAULT_ENV"
+#     echo "✓ Python path: $(which python)"
+# fi
 
 #- Other
 

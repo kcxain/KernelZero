@@ -5,8 +5,10 @@ __pycache__/
 
 
 logs/
-
+*.out
+*.err
 train_model/
+resources/
 
 # C extensions
 *.so

@@ -1,12 +1,11 @@
 #!/bin/bash
 
-model_name=$1
-save_name=$2
+save_name=$1
 
 pids=()
 
-for i in {0..7}; do
-  CUDA_VISIBLE_DEVICES=$i python question_evaluate/evaluate.py --model $model_name --suffix $i --save_name $save_name &
+for i in {1..7}; do
+  CUDA_VISIBLE_DEVICES=$i python torch_evaluate/evaluate.py --suffix $i --save_name $save_name &
   pids[$i]=$!
 done
 
