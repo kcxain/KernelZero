@@ -25,8 +25,8 @@ python3 -m verl.trainer.main \
     worker.actor.model.model_path=$solver_model_path \
     trainer.experiment_name=${experiment_name} \
     trainer.save_checkpoint_path=${STORAGE_PATH}/models/${experiment_name}/ \
-    trainer.load_checkpoint_path=${STORAGE_PATH}/models/${experiment_name}/global_step_2 \
-    data.train_files=${STORAGE_PATH}/generated_question/${experiment_name}_train/merge_data.json \
+    trainer.load_checkpoint_path=${STORAGE_PATH}/models/${experiment_name}/global_step_3 \
+    data.train_files=${STORAGE_PATH}/generated_question/${experiment_name}_train/3ops_0_results.json \
     trainer.total_epochs=100 \
     trainer.max_steps=6 \
     data.format_prompt=./examples/format_prompt/kernelbench.jinja \
@@ -36,10 +36,11 @@ python3 -m verl.trainer.main \
     worker.actor.micro_batch_size_per_device_for_experience=1 \
     trainer.save_freq=1
 
+# trainer.load_checkpoint_path=${STORAGE_PATH}/models/${experiment_name}/global_step_3 \
 # data.train_files=${STORAGE_PATH}/generated_question/${experiment_name}_train/merge_data.json \
 # data.train_files=/nfs_global/S/fangzixiang/train_model/R-zero/test/generated_question/qwen2.5-coder-7b-instruct_speedup_solver_v1_train/merge_data.json \
 # echo "merging model"
-# python scripts/model_merger.py --local_dir ${STORAGE_PATH}/models/${experiment_name}/global_step_2/actor
+# python scripts/model_merger.py --local_dir ${STORAGE_PATH}/models/${experiment_name}/global_step_6/actor
 # # trainer.load_checkpoint_path=${STORAGE_PATH}/models/${experiment_name}/global_step_5 \
 
 sleep 10

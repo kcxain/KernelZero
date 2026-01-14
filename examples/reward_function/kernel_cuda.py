@@ -3,7 +3,7 @@ import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 import requests
 import numpy as np
@@ -13,7 +13,8 @@ _score_counter = 0
 _score_lock = threading.Lock()
 
 
-def _log_sample_result(result: Dict[str, Any] = None, error: Exception = None, error_msg: str = None):
+def _log_sample_result(result: Dict[str, Any] = None, error: Exception = None, error_msg: str = None,
+                        cuda_code: str = None, torch_code: str = None):
     """
     线程安全地更新计数器并每10个样本输出一次日志
     
@@ -21,6 +22,8 @@ def _log_sample_result(result: Dict[str, Any] = None, error: Exception = None, e
         result: 样本结果字典，包含 formated, compiled, passed, msg
         error: 异常对象（如果发生错误）
         error_msg: 错误消息字符串（用于特殊情况，如提取失败）
+        cuda_code: CUDA代码（错误时输出）
+        torch_code: PyTorch代码（错误时输出）
     """
     global _score_counter, _score_lock
     
@@ -50,7 +53,7 @@ def _log_sample_result(result: Dict[str, Any] = None, error: Exception = None, e
                 
                 # 如果 passed=False，输出错误信息
                 if not passed and error_msg:
-                    # 截断过长的错误信息（保留前200个字符）
+                    # 截断错误信息（保留前200个字符）
                     error_display = error_msg[:200] + "..." if len(error_msg) > 200 else error_msg
                     print(
                         f"Sample {_score_counter}: formated={formated}, compiled={compiled}, "
@@ -112,7 +115,7 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
         }
         
 
-        _log_sample_result(error_msg="CANNOT EXTRACT CODE")
+        _log_sample_result(error_msg="CANNOT EXTRACT CODE", cuda_code=cuda_code, torch_code=ground_truth)
         
         return result
     
@@ -183,7 +186,7 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
         }
         
 
-        _log_sample_result(result=result)
+        _log_sample_result(result=result, cuda_code=cuda_code, torch_code=ground_truth)
         
         return result
         
@@ -197,7 +200,7 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
         }
         
 
-        _log_sample_result(error=e)
+        _log_sample_result(error=e, cuda_code=cuda_code, torch_code=ground_truth)
         
         return result
 
@@ -206,6 +209,7 @@ def compute_score(
     solution_strs: List[str], 
     ground_truths: List[str], 
     index: List[int],
+    dataset_index: Optional[List[int]] = None,
     alpha: float = 0.5,
     penalty_weight: float = 1.0
 ) -> List[Dict[str, Any]]:
@@ -216,6 +220,7 @@ def compute_score(
         solution_strs: 模型生成的代码列表（包含 CUDA 代码）
         ground_truths: PyTorch 参考代码列表
         index: 分组索引列表（uid）
+        dataset_index: 原始数据集索引列表（用于日志显示）
         alpha: 正确样本比例阈值，默认0.5
         penalty_weight: speedup奖励权重，默认1.0
         
@@ -250,6 +255,7 @@ def compute_score(
     # 按index分组处理
     group_ids = []
     grouped_data = {}
+    group_dataset_index = {}  # 保存每个组的原始数据集索引
     for i, idx in enumerate(index):
         if idx not in group_ids:
             group_ids.append(idx)
@@ -260,6 +266,11 @@ def compute_score(
                 "passed": [],
                 "speedup": [],
             }
+            # 保存该组的原始数据集索引（使用第一个样本的索引）
+            if dataset_index is not None and i < len(dataset_index):
+                group_dataset_index[idx] = dataset_index[i]
+            else:
+                group_dataset_index[idx] = -1
         grouped_data[idx]["formated"].append(formated[i])
         grouped_data[idx]["compiled"].append(compiled[i])
         grouped_data[idx]["passed"].append(passed[i])
@@ -332,6 +343,23 @@ def compute_score(
                     score = f * 0.1 + c * 0.1 + 0.0  # passed = 0.0
                 scores.append(float(score))
             id2scores[idx] = scores
+        
+        # 打印每个 prompt 的得分详情
+        original_idx = group_dataset_index.get(idx, -1)
+        if original_idx >= 0:
+            print(
+                f"[Prompt {original_idx}] Scores: {scores}, "
+                f"Passed: {group_passed}, Speedup: {group_speedup}, "
+                f"Mean: {np.mean(scores):.4f}, Max: {np.max(scores):.4f}, Min: {np.min(scores):.4f}",
+                file=sys.stderr, flush=True
+            )
+        else:
+            print(
+                f"[Prompt ?] Scores: {scores}, "
+                f"Passed: {group_passed}, Speedup: {group_speedup}, "
+                f"Mean: {np.mean(scores):.4f}, Max: {np.max(scores):.4f}, Min: {np.min(scores):.4f}",
+                file=sys.stderr, flush=True
+            )
 
     # 构建返回结果
     res = []
