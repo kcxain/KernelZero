@@ -83,6 +83,7 @@ dependencies = [
     "liger-kernel==0.5.10",
     "llguidance==0.7.29",
     "lm-format-enforcer==0.10.11",
+    "loguru>=0.7.3",
     "markdown-it-py==3.0.0",
     "markupsafe==3.0.2",
     "math-verify==0.7.0",
