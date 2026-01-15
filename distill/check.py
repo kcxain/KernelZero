@@ -1,4 +1,6 @@
 from loguru import logger
+import os
+from typing import Dict
 
 
 def compute_score_remote(problem: Dict, completion: str):
