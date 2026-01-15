@@ -2,14 +2,14 @@
 
 #- Job parameters
 
-#SBATCH -J torch_evaluate_v0                  # The job name
-#SBATCH -o logs/torch_evaluate_v0-%j.out         # Write the standard output to file named 'train-<job_number>.out'
-#SBATCH -e logs/torch_evaluate_v0-%j.err         # Write the standard error to file named 'train-<job_number>.err'
+#SBATCH -J torch_evaluate_v0_3_ops                  # The job name
+#SBATCH -o logs/torch_evaluate_v0_3_ops-%j.out         # Write the standard output to file named 'train-<job_number>.out'
+#SBATCH -e logs/torch_evaluate_v0_3_ops-%j.err         # Write the standard error to file named 'train-<job_number>.err'
 
 
 #- Resources
 
-#SBATCH -p r8nv-gpu-hw-80g               # Submit to 'r8nv-gpu-hw-80g' Partition (A100 80GB)
+#SBATCH -p r8nv-gpu-hw               # Submit to 'r8nv-gpu-hw-80g' Partition (A100 80GB)
 #SBATCH -t 0-6:00:00                # Run for a maximum time of 0 days, 24 hours, 00 mins, 00 secs
 #SBATCH --nodes=1                    # Request 1 node
 #SBATCH --gres=gpu:8                 # Request 8 GPUs per node
@@ -33,7 +33,7 @@
 ### You can specify the characteristics of the compute nodes, and even the names of the compute nodes
 ###
 ### #SBATCH --nodelist=r8a30-a0          # Request a specific list of hosts 
-### #SBATCH --constraint="A30|A100"      # Request GPU Type: A30 or A100_40GB
+#SBATCH --constraint="A100"      # Request GPU Type: A30 or A100_40GB
 ###
 
 #- Log information
@@ -120,9 +120,9 @@ echo -e "\033[31m[×] 已关闭代理\033[0m"
 ray stop --force
 
 export STORAGE_PATH=./train_model/kernelzero/v0_sft
-export save_name=2ops
+export save_name=3ops
 
-for i in {1..7}; do
+for i in {0..7}; do
   python torch_evaluate/evaluate.py --suffix $i --save_name $save_name --use_ray
 done
 

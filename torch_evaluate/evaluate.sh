@@ -4,7 +4,7 @@ save_name=$1
 
 pids=()
 
-for i in {1..7}; do
+for i in {0..7}; do
   CUDA_VISIBLE_DEVICES=$i python torch_evaluate/evaluate.py --suffix $i --save_name $save_name &
   pids[$i]=$!
 done
@@ -25,6 +25,6 @@ timeout_duration=3600
   done
 ) &
 
-for i in {1..7}; do
+for i in {0..7}; do
   wait ${pids[$i]} 2>/dev/null
 done

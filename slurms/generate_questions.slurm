@@ -2,9 +2,9 @@
 
 #- Job parameters
 
-#SBATCH -J torch_generate_v0                  # The job name
-#SBATCH -o logs/torch_generate_v0-%j.out         # Write the standard output to file named 'train-<job_number>.out'
-#SBATCH -e logs/torch_generate_v0-%j.err         # Write the standard error to file named 'train-<job_number>.err'
+#SBATCH -J torch_generate_v0_3ops                  # The job name
+#SBATCH -o logs/torch_generate_v0_3ops-%j.out         # Write the standard output to file named 'train-<job_number>.out'
+#SBATCH -e logs/torch_generate_v0_3ops-%j.err         # Write the standard error to file named 'train-<job_number>.err'
 
 
 #- Resources
@@ -122,6 +122,6 @@ ray start --head
 
 export STORAGE_PATH=./train_model/kernelzero/v0_sft
 # 启动脚本
-bash torch_generate/question_generate.bash /nfs_global/S/kechangxin/proj/llmpiler/checkpoints/qwen2.5-coder-cudallm_5k 1 2ops resources/torch_ops/2ops.json
+bash torch_generate/question_generate.bash /nfs_global/S/kechangxin/proj/llmpiler/checkpoints/qwen2.5-coder-cudallm_5k 1 3ops resources/torch_ops/3ops.json
 
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"
