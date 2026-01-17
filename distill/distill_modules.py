@@ -14,15 +14,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 from openai import OpenAI
-
+import re
 from distill.prompt import distill_optimize_prompt
 
-
-# ===================== Configuration =====================
-GENERATED_MODULES_DIR = (
-    Path(__file__).parent.parent / "train_model/kernelzero/v0_sft/generated_modules"
-)
-OUTPUT_DIR = Path(__file__).parent / "distilled_data"
 
 # Default vLLM API configuration
 DEFAULT_API_URL = os.getenv("OPENAI_API_URL", "http://10.200.108.4:8000/v1")
@@ -59,45 +53,6 @@ def compute_hash(code: str, operators: List[str]) -> str:
     ops_str = "|".join(sorted(operators))
     content = f"{code.strip()}|{ops_str}"
     return hashlib.md5(content.encode("utf-8")).hexdigest()
-
-
-def deduplicate_modules(modules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deduplicate modules based on code and operators."""
-    seen_hashes = set()
-    unique_modules = []
-
-    for module in modules:
-        code = module.get("code", "")
-        operators = module.get("operators", [])
-        h = compute_hash(code, operators)
-
-        if h not in seen_hashes:
-            seen_hashes.add(h)
-            unique_modules.append(module)
-
-    return unique_modules
-
-
-def collect_and_dedupe_modules() -> List[Dict[str, Any]]:
-    """
-    Collect all modules with score=1 from results.json files and deduplicate.
-    Returns a list of unique (code, operators) entries.
-    """
-    results_files = find_results_files(GENERATED_MODULES_DIR)
-    print(f"Found {len(results_files)} results.json files")
-
-    all_successful = []
-    for f in results_files:
-        results = load_results_file(f)
-        successful = filter_successful_modules(results)
-        print(f"  {f.name}: {len(successful)}/{len(results)} successful")
-        all_successful.extend(successful)
-
-    print(f"Total successful modules before deduplication: {len(all_successful)}")
-    unique_modules = deduplicate_modules(all_successful)
-    print(f"Unique modules after deduplication: {len(unique_modules)}")
-
-    return unique_modules
 
 
 def construct_prompt(py_code: str) -> str:
@@ -148,7 +103,7 @@ def call_vllm_api(
         if completion.choices and len(completion.choices) > 0:
             return True, completion.choices[0].text
         else:
-            return False, f"No choices in response"
+            return False, "No choices in response"
 
     except Exception as e:
         return False, f"Error: {e}"
@@ -158,7 +113,7 @@ def call_vllm_chat_api(
     prompt: str,
     client: OpenAI,
     model: str = None,
-    max_tokens: int = 4096,
+    max_tokens: int = 20480,
     temperature: float = 0.7,
     top_p: float = 0.95,
 ) -> Tuple[bool, str]:
@@ -180,16 +135,16 @@ def call_vllm_chat_api(
             top_p=top_p,
         )
         # print(chat_completion)
-        if chat_completion.choices and len(chat_completion.choices) > 0:
-            return True, chat_completion.choices[0].message.content
-        else:
-            return False, f"No choices in response"
-
+        res = {
+            "answer": chat_completion.choices[0].message.content,
+            "reasoning": chat_completion.choices[0].message.reasoning,
+        }
+        # print(res)
+        return True, res
+    
     except Exception as e:
         return False, f"Error: {e}"
 
-
-import re
 
 def extract_code(response: str) -> str:
     """Extract the last code block (preferably python) from the response using regex."""
@@ -211,8 +166,8 @@ def process_single_module(
     **kwargs,
 ) -> Dict[str, Any]:
     """Process a single module through the API."""
-    code = module.get("code", "")
-    operators = module.get("operators", [])
+    code = module.get("module", "")
+    operators = module.get("ops", [])
 
     prompt = construct_prompt(code)
     # print(prompt)
@@ -222,19 +177,25 @@ def process_single_module(
     else:
         success, response = call_vllm_api(prompt, client, model, **kwargs)
 
-    extracted_response = extract_code(response) if success else ""
+    # extracted_response = extract_code(response) if success else ""
 
     return {
-        "original_code": code,
-        "operators": operators,
+        "index": module.get("index"),
+        "ops": operators,
+        "module": code,
         # "prompt": prompt,
-        "success": success,
+        "call_success": success,
         "response": response,
-        "extracted_response": extracted_response,
     }
 
 
+def load_jsonl(file_path: str) -> List[Dict[str, Any]]:
+    """Load a JSONL file into a list of dictionaries."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
+
 def run_distillation(
+    input_file: str = None,
     api_url: str = None,
     model: str = None,
     api_key: str = None,
@@ -265,21 +226,12 @@ def run_distillation(
     client = get_openai_client(api_url, api_key)
     model = model or DEFAULT_MODEL
 
-    # Collect and deduplicate modules
-    modules = collect_and_dedupe_modules()
-
+    data = load_jsonl(input_file)
     if limit:
-        modules = modules[:limit]
-        print(f"Limited to {limit} modules for processing")
+        data = data[:limit]
 
-    # Prepare output directory
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    if output_file is None:
-        output_file = OUTPUT_DIR / "distilled_results.jsonl"
-    else:
-        output_file = Path(output_file)
 
-    print(f"\nStarting distillation with {len(modules)} modules...")
+    print(f"\nStarting distillation with {len(data)} modules...")
     print(f"API URL: {api_url or DEFAULT_API_URL}")
     print(f"Model: {model}")
     print(f"Output: {output_file}")
@@ -292,15 +244,15 @@ def run_distillation(
         futures = {
             executor.submit(
                 process_single_module,
-                module,
+                d,
                 client,
                 model,
                 use_chat_api=use_chat_api,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
-            ): i
-            for i, module in enumerate(modules)
+            ): d['index']
+            for d in data
         }
 
         with open(output_file, "w", encoding="utf-8") as f:
@@ -320,40 +272,13 @@ def run_distillation(
 
     # Summary
     successful = sum(1 for r in results if r.get("success"))
-    print(f"\nDistillation complete!")
+    print("\nDistillation complete!")
     print(f"Total processed: {len(results)}")
     print(f"Successful: {successful}")
     print(f"Failed: {len(results) - successful}")
     print(f"Results saved to: {output_file}")
 
     return results
-
-
-def export_modules_only(output_file: str = None):
-    """
-    Export only the unique modules without calling API (for inspection).
-    """
-    modules = collect_and_dedupe_modules()
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    if output_file is None:
-        output_file = OUTPUT_DIR / "unique_modules.json"
-    else:
-        output_file = Path(output_file)
-
-    # Prepare export data
-    export_data = []
-    for module in modules:
-        export_data.append({
-            "code": module.get("code", ""),
-            "operators": module.get("operators", []),
-        })
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(export_data, f, indent=2, ensure_ascii=False)
-
-    print(f"Exported {len(export_data)} unique modules to {output_file}")
-    return export_data
 
 
 def main():
@@ -365,12 +290,12 @@ def main():
         help="vLLM API endpoint URL (e.g., http://localhost:8000)",
     )
     parser.add_argument("--model", type=str, required=True, help="Model name or path")
-    parser.add_argument("--output", type=str, default=None, help="Output file path")
+    parser.add_argument("--output_file", type=str, default=None, help="Output file path")
     parser.add_argument(
         "--workers", type=int, default=4, help="Number of parallel workers"
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=4096, help="Maximum tokens to generate"
+        "--max-tokens", type=int, default=20480, help="Maximum tokens to generate"
     )
     parser.add_argument(
         "--temperature", type=float, default=0.7, help="Sampling temperature"
@@ -391,23 +316,21 @@ def main():
         action="store_true",
         help="Only export unique modules without API calls",
     )
+    parser.add_argument("--input_file", type=str, required=True, help="Input file path")
 
     args = parser.parse_args()
-
-    if args.export_only:
-        export_modules_only(args.output)
-    else:
-        run_distillation(
-            api_url=args.api_url,
-            model=args.model,
-            output_file=args.output,
-            max_workers=args.workers,
-            use_chat_api=not args.use_completions,
-            max_tokens=args.max_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            limit=args.limit,
-        )
+    run_distillation(
+        input_file=args.input_file,
+        api_url=args.api_url,
+        model=args.model,
+        output_file=args.output_file,
+        max_workers=args.workers,
+        use_chat_api=not args.use_completions,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        limit=args.limit,
+    )
 
 
 if __name__ == "__main__":

@@ -165,7 +165,7 @@ class ModelNew(nn.Module):
 
 2. **Fusion**: Merge consecutive operators into a single kernel to minimize memory read/write operations, especially beneficial for memory-bound workloads.
 
-== Fusion Example Start ==
+===== Fusion Example Start =====
 Given PyTorch model:
 ```python
 import torch
@@ -363,13 +363,12 @@ class ModelNew(nn.Module):
     def forward(self, x):
         return fused_conv_module.fused_conv_min_tanh_cuda(x, self.conv.weight, self.conv.bias)
 ```
-== Fusion Example Start ==
+===== Fusion Example End =====
 
 3. **Pipeline**: Overlap computation with data movement to hide memory latency and maximize hardware utilization.
 4. **Reordering**: Swap loop orders to improve memory access locality, enhancing cache efficiency and reducing cache misses.
 
-Apply these strategies together to generate a highly efficient, memory-optimized CUDA kernel.
-
+You should first think carefully about the best way to apply these strategies together, then write the CUDA kernel.
 ## Now you are given the below PyTorch model:
 ```python
 __py_code_to_be_fill__
