@@ -135,9 +135,14 @@ def call_vllm_chat_api(
             top_p=top_p,
         )
         # print(chat_completion)
+        # 判断字段是reasoning还是reasoning_content
+        if "reasoning" in chat_completion.choices[0].message:
+            reasoning = chat_completion.choices[0].message.reasoning
+        else:
+            reasoning = chat_completion.choices[0].message.reasoning_content
         res = {
             "answer": chat_completion.choices[0].message.content,
-            "reasoning": chat_completion.choices[0].message.reasoning,
+            "reasoning": reasoning,
         }
         # print(res)
         return True, res
@@ -206,6 +211,8 @@ def run_distillation(
     temperature: float = 0.7,
     top_p: float = 0.95,
     limit: int = None,
+    start_index: int = 0,
+    end_index: int = -1,
 ):
     """
     Main function to run the distillation process.
@@ -228,7 +235,15 @@ def run_distillation(
 
     data = load_jsonl(input_file)
     if limit:
-        data = data[:limit]
+        data = data[start_index:end_index]
+    elif start_index != 0 or end_index != -1:
+        data = data[start_index:end_index]
+    else:
+        data = data
+
+
+    if output_file is None:
+        output_file = input_file.replace(".jsonl", f"_distilled_{start_index}_{end_index}.jsonl")
 
 
     print(f"\nStarting distillation with {len(data)} modules...")
@@ -316,6 +331,12 @@ def main():
         action="store_true",
         help="Only export unique modules without API calls",
     )
+    parser.add_argument(
+        "--start-index", type=int, default=0, help="Start index of the modules to process"
+    )
+    parser.add_argument(
+        "--end-index", type=int, default=-1, help="End index of the modules to process"
+    )
     parser.add_argument("--input_file", type=str, required=True, help="Input file path")
 
     args = parser.parse_args()
@@ -330,6 +351,8 @@ def main():
         temperature=args.temperature,
         top_p=args.top_p,
         limit=args.limit,
+        start_index=args.start_index,
+        end_index=args.end_index,
     )
 
 

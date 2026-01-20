@@ -22,7 +22,4 @@ def compute_score_remote(problem: Dict, completion: str):
     response.raise_for_status()
     res_json = response.json()
     logger.info(res_json)
-    if res_json["passed"]:
-        return True, res_json["msg"]
-    else:
-        return False, res_json["msg"]
+    return res_json
