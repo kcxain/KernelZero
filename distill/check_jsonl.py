@@ -11,59 +11,51 @@ from typing import Dict, Any, Tuple
 from threading import Lock
 
 from distill.check import compute_score_remote
+import re
 
+def extract_code(response: str) -> str:
+    """
+    Extract the code from the response.
+    """
+    # 用正则
+    pattern = r"```python\n(.*?)\n```"
+    match = re.search(pattern, response, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return "None"
 
 def check_single_entry(
-    entry: Dict[str, Any], line_num: int
+    entry: Dict[str, Any]
 ) -> Tuple[int, Dict[str, Any]]:
     """
     Check a single entry using compute_score_remote.
 
     Args:
         entry: The JSON entry to check
-        line_num: Line number for logging
 
     Returns:
-        Tuple of (line_num, entry_with_check_result)
+        Tuple of (index, entry_with_result)
     """
+    idx = entry.get("index", -1)
+
     # Extract required fields
-    original_code = entry.get("original_code", "")
-    extracted_response = entry.get("extracted_response", "")
+    module = entry.get("module", "")
+    response = entry.get("response", "").get("answer", "")
+    code = extract_code(response)
 
-    if not original_code:
-        logger.warning(f"Line {line_num}: Missing original_code")
-        entry["check_result"] = {
-            "passed": False,
-            "error": "Missing original_code",
-        }
-        return line_num, entry
-
-    if not extracted_response:
-        logger.warning(f"Line {line_num}: Missing extracted_response")
-        entry["check_result"] = {
-            "passed": False,
-            "error": "Missing extracted_response",
-        }
-        return line_num, entry
-
-    # Construct problem dict as expected by compute_score_remote
-    problem = {"ground_truth": {"pytorch_module": original_code}}
+    problem = {"ground_truth": {"pytorch_module": module}}
 
     # Check the entry
     try:
-        passed, msg = compute_score_remote(problem, extracted_response)
-        entry["check_result"] = {"passed": passed, "msg": msg}
-        logger.info(entry["check_result"])
-        if passed:
-            logger.debug(f"Line {line_num}: PASSED")
-        else:
-            logger.debug(f"Line {line_num}: FAILED - {msg}")
+        res_json = compute_score_remote(problem, code)
+        # Preserve all original fields; only add `result`.
+        entry["result"] = res_json
 
     except Exception as e:
-        logger.error(f"Line {line_num}: Error during check - {e}")
-        entry["check_result"] = {"passed": False, "error": str(e)}
+        logger.error(f"Index {idx}: Error during check - {e}")
+        entry["result"] = {"passed": False, "error": str(e)}
 
-    return line_num, entry
+    return idx, entry
 
 
 def check_jsonl_file(jsonl_path: str, output_path: str = None, max_workers: int = 32):
@@ -99,7 +91,10 @@ def check_jsonl_file(jsonl_path: str, output_path: str = None, max_workers: int 
                 continue
             try:
                 entry = json.loads(line)
-                entries.append((line_num, entry))
+                if "index" not in entry:
+                    logger.error(f"Line {line_num}: Missing `index` field; skipping")
+                    continue
+                entries.append(entry)
             except json.JSONDecodeError as e:
                 logger.error(f"Line {line_num}: JSON decode error - {e}")
                 continue
@@ -110,99 +105,55 @@ def check_jsonl_file(jsonl_path: str, output_path: str = None, max_workers: int 
     # Statistics (using list for thread-safe updates)
     stats = {"passed": 0, "failed": 0, "error": 0, "total": 0}
 
-    # Dictionary to store results temporarily (for ordered writing)
-    results_dict = {}
-    next_write_line = 1  # Track which line should be written next
     write_lock = Lock()
 
     # Open output file for writing
     f_out = open(output_path, "w", encoding="utf-8")
 
-    def write_result(line_num: int, checked_entry: Dict[str, Any]):
-        """Write a result if it's the next one in order, or store it for later."""
-        nonlocal next_write_line, stats
-
+    def write_result(checked_entry: Dict[str, Any]):
+        """Write a checked entry immediately (real-time flush)."""
         with write_lock:
-            results_dict[line_num] = checked_entry
+            f_out.write(json.dumps(checked_entry, ensure_ascii=False) + "\n")
+            f_out.flush()  # Ensure immediate write to disk
 
-            # Write all consecutive results that are ready
-            while next_write_line in results_dict:
-                entry = results_dict.pop(next_write_line)
-                f_out.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                f_out.flush()  # Ensure immediate write to disk
-
-                # Update statistics
-                stats["total"] += 1
-                check_result = entry.get("check_result", {})
-                if check_result.get("passed", False):
-                    stats["passed"] += 1
-                elif "error" in check_result:
-                    stats["error"] += 1
-                else:
-                    stats["failed"] += 1
-
-                next_write_line += 1
+            # Update statistics
+            stats["total"] += 1
+            result = checked_entry.get("result", {})
+            if result.get("passed", False):
+                stats["passed"] += 1
+            elif "error" in result:
+                stats["error"] += 1
+            else:
+                stats["failed"] += 1
 
     # Process entries in parallel
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
-        future_to_line = {
-            executor.submit(check_single_entry, entry, line_num): line_num
-            for line_num, entry in entries
-        }
+        future_to_index = {executor.submit(check_single_entry, entry): entry["index"] for entry in entries}
 
         # Process completed tasks with progress bar
         with tqdm(total=total_lines, desc="Checking entries") as pbar:
-            for future in as_completed(future_to_line):
-                line_num = future_to_line[future]
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
                 try:
-                    result_line_num, checked_entry = future.result()
-                    # Write result (will write immediately if in order, or store for later)
-                    write_result(result_line_num, checked_entry)
+                    _idx, checked_entry = future.result()
+                    # Write result immediately (real-time)
+                    write_result(checked_entry)
 
                 except Exception as e:
-                    logger.error(f"Line {line_num}: Unexpected error - {e}")
-                    # Create error entry - find original entry to preserve its data
+                    logger.error(f"Index {idx}: Unexpected error - {e}")
+                    # Preserve original entry data where possible
                     original_entry = None
-                    for ln, ent in entries:
-                        if ln == line_num:
+                    for ent in entries:
+                        if ent.get("index") == idx:
                             original_entry = ent.copy()
                             break
-                    if original_entry:
-                        original_entry["check_result"] = {
-                            "passed": False,
-                            "error": str(e),
-                        }
-                        write_result(line_num, original_entry)
-                    else:
-                        # Fallback if entry not found
-                        error_entry = {
-                            "check_result": {"passed": False, "error": str(e)}
-                        }
-                        write_result(line_num, error_entry)
+                    if original_entry is None:
+                        original_entry = {"index": idx}
+                    original_entry["result"] = {"passed": False, "error": str(e)}
+                    write_result(original_entry)
 
                 pbar.update(1)
-
-    # Ensure all remaining results are written
-    with write_lock:
-        while next_write_line <= total_lines:
-            if next_write_line in results_dict:
-                entry = results_dict.pop(next_write_line)
-                f_out.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                f_out.flush()
-
-                stats["total"] += 1
-                check_result = entry.get("check_result", {})
-                if check_result.get("passed", False):
-                    stats["passed"] += 1
-                elif "error" in check_result:
-                    stats["error"] += 1
-                else:
-                    stats["failed"] += 1
-
-                next_write_line += 1
-            else:
-                break
 
     f_out.close()
 
