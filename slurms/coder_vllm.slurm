@@ -8,18 +8,18 @@
 
 #- Resources
 
-#SBATCH -p r8nv-gpu-hw-80g
-#SBATCH -t 0-3:00:00
+#SBATCH -p r8nv-gpu-hw
+#SBATCH -t 3-00:00:00
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
 #SBATCH --gres-flags=enforce-binding
-#SBATCH --qos=gpu-normal
+#SBATCH --qos=gpu-long
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=32
-#SBATCH --exclude=r8a100-d00
-#SBATCH --exclude=r8a100-d05
-#SBATCH --exclude=r8l40s-a04
-#SBATCH --exclude=r8l40s-a02
+### #SBATCH --exclude=r8a100-d00
+### #SBATCH --exclude=r8a100-d05
+### #SBATCH --exclude=r8l40s-a04
+### #SBATCH --exclude=r8l40s-a02
 
 set -euo pipefail
 
@@ -54,7 +54,7 @@ echo "$(df -h | grep -v tmpfs)"
 ulimit -l unlimited
 ulimit -v unlimited
 ulimit -n 65535
-ulimit -u 4125556
+# ulimit -u 4125556
 
 #- Load environments
 source /tools/module_env.sh

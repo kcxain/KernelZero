@@ -54,7 +54,7 @@ def _log_sample_result(
                 print(
                     f"Sample {_score_counter}: coder_passed={coder_passed}",
                     file=sys.stderr,
-                    flush=True,
+                    flush=True,1
                 )
 
 
