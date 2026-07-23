@@ -1,7 +1,7 @@
 [project]
 name = "kernelzero"
 version = "0.1.0"
-description = "Add your description here"
+description = "Self-evolving Proposer and kernel Coder training for PyTorch-to-Triton/CUDA generation"
 readme = "README.md"
 requires-python = ">=3.12"
 

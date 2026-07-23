@@ -10,6 +10,12 @@ logs/
 *.err
 train_model/
 resources/
+analysis/
+checkpoints/
+outputs/
+runs/
+*.partial
+*.pre_*
 
 # C extensions
 *.so
@@ -51,6 +57,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.cache/
 nosetests.xml
 coverage.xml
 *.cover

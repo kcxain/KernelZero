@@ -273,7 +273,7 @@ class PyTorchOperatorQuery:
                 # 确定模块前缀
                 if pattern.startswith(r"\btorch\.") and "nn" not in pattern:
                     apis.add(f"torch.{match}")
-                elif "nn\." in pattern or "torch\.nn\." in pattern:
+                elif r"nn\." in pattern or r"torch\.nn\." in pattern:
                     if "functional" in pattern:
                         apis.add(f"torch.nn.functional.{match}")
                     else:

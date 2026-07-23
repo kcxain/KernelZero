@@ -7,6 +7,7 @@
 import json
 import os
 import sys
+import argparse
 from typing import Dict, List, Any
 import pandas as pd
 
@@ -151,16 +152,25 @@ def extract_ops_from_parquet(
 
 def main():
     """主函数"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("parquet_path", help="Input CUDA-LLM parquet file")
+    parser.add_argument(
+        "--output-dir",
+        default="resources/torch_ops",
+        help="Directory for extracted operator combinations",
+    )
+    args = parser.parse_args()
+
     # 获取项目根目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     os.chdir(project_root)
     
     # 输入文件路径
-    parquet_path = "/share/personal/S/kechangxin/datasets/cudallm/rl_cuda_llm_0424.parquet"
+    parquet_path = args.parquet_path
     
     # 输出目录
-    output_dir = "resources/torch_ops"
+    output_dir = args.output_dir
     
     # 检查文件是否存在
     if not os.path.exists(parquet_path):
@@ -186,4 +196,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
