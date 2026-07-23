@@ -108,10 +108,14 @@ class Runner:
 def main():
     cli_args = OmegaConf.from_cli()
     default_config = OmegaConf.structured(PPOConfig())
-    with open('tokens.json', 'r') as f:
-        tokens = json.load(f)
-    os.environ['HF_TOKEN'] = tokens['huggingface']
-    os.environ['WANDB_API_KEY'] = tokens['wandb']
+    tokens_path = os.environ.get("KERNELZERO_TOKENS_FILE")
+    if tokens_path:
+        with open(tokens_path, encoding="utf-8") as f:
+            tokens = json.load(f)
+        if tokens.get("huggingface"):
+            os.environ.setdefault("HF_TOKEN", tokens["huggingface"])
+        if tokens.get("wandb"):
+            os.environ.setdefault("WANDB_API_KEY", tokens["wandb"])
     if hasattr(cli_args, "config"):
         config_path = cli_args.pop("config", None)
         file_config = OmegaConf.load(config_path)

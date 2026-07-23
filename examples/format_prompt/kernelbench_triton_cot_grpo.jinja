@@ -1,0 +1,151 @@
+You are an expert in PyTorch and CUDA programming, especially Triton kernel programming. You will be given a python code snippet which declares a PyTorch model along with its init and forward inputs. The model is an instance of class Model. It will be created with arguments from get_init_inputs(). Then its forward function will be called with data from get_inputs(). Your task is to write a custom Triton implementation to accelerate the model forward function.
+
+Note that:
+- Think carefully before providing your final answer.
+- The provided PyTorch model source is complete. Do not ask for more code.
+- Provide only a single python code block in your final answer.
+- Name your optimized model as ModelNew.
+- Keep ModelNew.__init__ and ModelNew.forward signatures the same as Model.
+- Keep the names of all submodules unchanged. Ensure the keys of model state dict are unchanged.
+- Do not create any extra tensor parameter during model initialization.
+- Use triton and triton.language to implement custom kernels. Import them as import triton and import triton.language as tl.
+- Define real Triton kernels with @triton.jit, allocate output tensors with torch, and launch kernels from ModelNew.forward or a helper called by ModelNew.forward.
+- Carefully decide each kernel function signature and pass the correct tensors, scalar sizes, strides, and compile-time constants into the Triton kernels.
+- Optimize kernels using block sizes, num_warps, num_stages, masking, pointer arithmetic, and program ids appropriately.
+- Prefer correctness first, then speed.
+- Prefer simple, operation-matched Triton kernels for elementwise operations, simple reductions, simple indexing, clone/copy, reshape-adjacent data movement, and lightweight fusion.
+- For complex modules such as Conv1d/2d/3d, ConvTranspose, PixelShuffle, BatchNorm, GroupNorm, embedding, interpolation, loss functions, or complicated indexing, it is acceptable to keep the unsuitable heavy module unchanged while accelerating a suitable surrounding operation with Triton.
+- Do not introduce unrelated Linear, GEMM, matmul, convolution, or dot-product kernels unless Model.forward actually uses that operation.
+- Do not output a skeleton, template, TODO, generic wrapper, placeholder code, or NotImplementedError.
+- Do not use torch.utils.cpp_extension, inline C++/CUDA source strings, cublas, cudnn, or custom CUDA extensions. This Triton path must be pure Python + Triton.
+
+## Generate Triton kernels optimized for a 4-card NVIDIA A100-40GB setup, below is the Architecture information.
+
+- GPU Architecture: Ampere
+- GPU Memory: 40GB per GPU, 4 GPUs available for evaluation
+- Memory Bandwidth: 1555 GB/s per GPU
+- FP64 TFLOPS: 9.7
+- FP64 Tensor Core TFLOPS: 19.5
+- FP32 TFLOPS: 19.5
+- TF32 Tensor Core TFLOPS: 156 (312 with sparsity)
+- BFLOAT16 Tensor Core TFLOPS: 312 (624 with sparsity)
+- FP16 Tensor Core TFLOPS: 312 (624 with sparsity)
+- INT8 Tensor Core TOPS: 624 (1248 with sparsity)
+- Register File Size: 64K 32-bit registers per SM
+- Maximum number of registers per thread: 255
+- Maximum number of thread blocks per SM: 32
+- Shared memory capacity per SM: 164 KB
+- Maximum shared memory per thread block: 163 KB
+
+## Here are examples of output formats and optimization styles you can refer to when generating your own. They are Triton examples adapted from high-speed Triton trajectories; do not be limited by their optimization methods. Match the actual operations in the given Model.forward.
+
+===== Elementwise Vector Add Example Start =====
+Given a PyTorch model:
+```python
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, a, b):
+        return a + b
+
+def get_inputs():
+    a = torch.randn(1, 128).cuda()
+    b = torch.randn(1, 128).cuda()
+    return [a, b]
+
+def get_init_inputs():
+    return []
+```
+You can write the following Triton implementation:
+```python
+import torch
+import torch.nn as nn
+import triton
+import triton.language as tl
+
+@triton.jit
+def _add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    tl.store(out_ptr + offsets, x + y, mask=mask)
+
+class ModelNew(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, a, b):
+        a_contig = a.contiguous()
+        b_contig = b.contiguous()
+        out = torch.empty_like(a_contig)
+        n_elements = out.numel()
+        grid = (triton.cdiv(n_elements, 256),)
+        _add_kernel[grid](a_contig, b_contig, out, n_elements, BLOCK_SIZE=256)
+        return out.view_as(a)
+```
+===== Elementwise Vector Add Example End =====
+
+===== Elementwise Fusion Example Start =====
+Given a PyTorch model:
+```python
+import torch
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        x = torch.abs(x)
+        x = x - 1.0
+        return x
+
+def get_inputs():
+    return [torch.randn(64, 128).cuda()]
+
+def get_init_inputs():
+    return []
+```
+You can fuse both elementwise operations into one Triton kernel:
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _abs_sub_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = tl.abs(x) - 1.0
+    tl.store(y_ptr + offsets, y, mask=mask)
+
+class ModelNew(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        x_contig = x.contiguous()
+        y = torch.empty_like(x_contig)
+        n_elements = x_contig.numel()
+        grid = (triton.cdiv(n_elements, 1024),)
+        _abs_sub_kernel[grid](x_contig, y, n_elements, BLOCK_SIZE=1024, num_warps=4)
+        return y.view_as(x)
+```
+===== Elementwise Fusion Example End =====
+
+## Now you are given the actual complete PyTorch model source.
+The following Python code is complete and authoritative. It is not a placeholder.
+Generate the optimized Triton implementation for this exact model.
+
+```python
+{{ py_code }}
+```
+
+Please respond with thinking process and your final answer.
