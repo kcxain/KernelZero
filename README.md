@@ -294,4 +294,4 @@ Repository-local secrets belong in environment variables or ignored `.env` files
 
 ## Acknowledgments
 
-KernelZero builds on [R-Zero](https://github.com/Chengsong-Huang/R-Zero), [verl](https://github.com/volcengine/verl), and [KernelBench](https://github.com/ScalingIntelligence/KernelBench).
+We thank the developers and contributors of [R-Zero](https://github.com/Chengsong-Huang/R-Zero), [verl](https://github.com/volcengine/verl), [KernelBench](https://github.com/ScalingIntelligence/KernelBench), and [cudaLLM](https://github.com/ByteDance-Seed/cudaLLM) for making their work available to the community.
