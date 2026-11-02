@@ -25,8 +25,8 @@ GENERATED_MODULES_DIR = (
 OUTPUT_DIR = Path(__file__).parent / "distilled_data"
 
 # Default vLLM API configuration
-DEFAULT_API_URL = os.getenv("OPENAI_API_URL", "http://10.200.108.4:8000/v1")
-DEFAULT_API_KEY = "token-abc123"
+DEFAULT_API_URL = os.getenv("OPENAI_API_URL", "http://127.0.0.1:8000/v1")
+DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "EMPTY")
 DEFAULT_MODEL = "oss"
 
 
@@ -248,9 +248,9 @@ def run_distillation(
     Main function to run the distillation process.
 
     Args:
-        api_url: vLLM API endpoint URL (default: from env or http://10.200.108.4:8000/v1)
+        api_url: vLLM API endpoint URL (default: OPENAI_API_URL or localhost)
         model: Model name/path (default: oss)
-        api_key: API key (default: token-abc123)
+        api_key: API key (default: OPENAI_API_KEY or EMPTY for local vLLM)
         output_file: Path to save results
         max_workers: Number of parallel workers
         use_chat_api: Use chat completions API vs completions API

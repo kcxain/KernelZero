@@ -1,3 +1,5 @@
+import os
+
 import requests
 
 # level 2 index 85 agent name: KernelAgent 4o speedup: 1.24x
@@ -183,9 +185,9 @@ def get_init_inputs():
     ]
 '''
 
-gpu_ip = "10.200.198.10"
+keck_base_url = os.environ.get("KECK_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 response = requests.post(
-    url=f"http://{gpu_ip}:8000/compute_score",
+    url=f"{keck_base_url}/compute_score",
     data={
         "cuda_code": cuda_code,
         "torch_code": torch_code,

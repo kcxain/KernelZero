@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH -J kb_triton_eval
-#SBATCH --qos=gpu-short
 #SBATCH -t 06:00:00
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
@@ -34,21 +33,17 @@ echo "PROBLEM_IDS=${PROBLEM_IDS:-}"
 echo "OFFSET=${OFFSET:-0}"
 echo "LIMIT=${LIMIT:-}"
 
-source /tools/module_env.sh
-module load cluster-tools/v1.0
-module load slurm-tools/v1.0
-module unload cuda-cudnn cuda >/dev/null 2>&1 || true
-module load cuda-cudnn/12.4-9.1.1
+ROOT="$PROJECT_ROOT"
+source "$PROJECT_ROOT/scripts/activate_cluster_env.sh"
 
-export CUDA_HOME=/tools/cluster-software/cuda-cudnn/cuda-12.4.1-9.1.1
-export PATH="${CUDA_HOME}/bin:${PATH}"
-export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+if [[ -n "${CUDA_HOME:-}" ]]; then
+  export PATH="${CUDA_HOME}/bin:${PATH}"
+  export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+fi
 
 unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 export PYTHONUNBUFFERED=1
 export KERNELBENCH_ROOT RUNS_DIR
-
-source "${PROJECT_ROOT}/.venv/bin/activate"
 
 python scripts/kernelbench_triton_eval.py
 

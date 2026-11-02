@@ -33,11 +33,7 @@ class CompileConfig:
         default_factory=lambda: int(os.getenv("COMPILE_TIMEOUT", "180"))
     )
     # CUDA 安装路径
-    cuda_home: str = field(
-        default_factory=lambda: os.getenv(
-            "CUDA_HOME", "/tools/cluster-software/cuda-cudnn/cuda-12.4.1-9.1.1"
-        )
-    )
+    cuda_home: str = field(default_factory=lambda: os.getenv("CUDA_HOME", "/usr/local/cuda"))
     # 目标 CUDA 架构（A100 = 8.0）
     cuda_arch_list: str = field(
         default_factory=lambda: os.getenv("TORCH_CUDA_ARCH_LIST", "8.0")

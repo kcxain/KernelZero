@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH -J serve_keck
-#SBATCH -p r8nv-gpu-hw-80g
-#SBATCH --qos=gpu-normal
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH -t 30:00:00
-#SBATCH --exclude=r8a100-d05
 #SBATCH -o logs/serve-keck-%j.out
 #SBATCH -e logs/serve-keck-%j.err
 
@@ -19,8 +16,6 @@ KECK_ROOT="${KECK_ROOT:-$KERNELZERO_ROOT/keck}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 VENV_PATH="${VENV_PATH:-$KERNELZERO_ROOT/.venv}"
-CUDA_MODULE="${CUDA_MODULE:-cuda-cudnn/12.4-9.1.1}"
-CUDA_HOME="${CUDA_HOME:-/tools/cluster-software/cuda-cudnn/cuda-12.4.1-9.1.1}"
 NUM_GPUS="${NUM_GPUS:-4}"
 NUM_CPUS="${NUM_CPUS:-8}"
 COMPILER_CPUS="${COMPILER_CPUS:-2}"
@@ -58,14 +53,10 @@ echo "RAY_PORT=${RAY_PORT}"
 echo "RAY_TMPDIR=${RAY_TMPDIR}"
 echo "OMP_NUM_THREADS=${OMP_NUM_THREADS}"
 
-module use /tools/cluster-modulefiles || true
-module load cluster-tools/v1.0 || true
-module load slurm-tools/v1.0 || true
-module unload cuda-cudnn cuda >/dev/null 2>&1 || true
-module load "${CUDA_MODULE}"
+ROOT="$KERNELZERO_ROOT"
+source "$KERNELZERO_ROOT/scripts/activate_cluster_env.sh"
 
 unset PYTHONHOME || true
-export CUDA_HOME="${CUDA_HOME}"
 export NUM_GPUS="${NUM_GPUS}"
 export NUM_CPUS="${NUM_CPUS}"
 export COMPILER_CPUS="${COMPILER_CPUS}"
@@ -83,10 +74,6 @@ export RAY_TMPDIR="${RAY_TMPDIR}"
 unset RAY_ADDRESS || true
 mkdir -p "${RAY_TMPDIR}"
 
-if [[ -x "${VENV_PATH}/bin/python" ]]; then
-  export VIRTUAL_ENV="${VENV_PATH}"
-  export PATH="${VENV_PATH}/bin:${PATH}"
-fi
 hash -r
 
 python - <<'PY'

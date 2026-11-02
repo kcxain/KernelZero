@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH -J kz-triton-vllm
-#SBATCH -p r8nv-gpu-hw
-#SBATCH --qos=gpu-normal
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=32
@@ -21,16 +19,13 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-24576}"
 
 cd "$ROOT"
 mkdir -p logs
-source /tools/module_env.sh
-module load cluster-tools/v1.0 || true
-module load slurm-tools/v1.0 || true
-module load cuda-cudnn/12.4-9.1.1
-source "$ROOT/.venv/bin/activate"
+source "$ROOT/scripts/activate_cluster_env.sh"
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
-export CUDA_HOME=/tools/cluster-software/cuda-cudnn/cuda-12.4.1-9.1.1
-export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+if [[ -n "${CUDA_HOME:-}" ]]; then
+  export PATH="$CUDA_HOME/bin:$PATH"
+  export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+fi
 
 test -s "$MODEL_PATH/config.json"
 NODE_IP="$(hostname -I | awk '{print $1}')"

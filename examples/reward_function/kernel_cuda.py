@@ -120,10 +120,10 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
         return result
     
     # 调用 API 评估
-    gpu_ip = os.environ.get("CUDA_SERVER_IP", "10.200.240.10")
+    keck_base_url = os.environ.get("KECK_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
     try:
         response = requests.post(
-            url=f"http://{gpu_ip}:8000/compute_score",
+            url=f"{keck_base_url}/compute_score",
             data={
                 "cuda_code": cuda_code,
                 "torch_code": ground_truth,

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH -J kz-validate-modules
-#SBATCH -p r8nv-gpu-hw-80g
-#SBATCH --qos=gpu-normal
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:8
 #SBATCH --gres-flags=enforce-binding
@@ -10,7 +8,6 @@
 #SBATCH -t 06:00:00
 #SBATCH -o logs/kz-validate-modules-%j.out
 #SBATCH -e logs/kz-validate-modules-%j.err
-#SBATCH --exclude=r8a100-d00,r8a100-d05
 
 set -euo pipefail
 
@@ -20,11 +17,7 @@ export STORAGE_PATH="${STORAGE_PATH:-$ROOT/train_model/generated}"
 
 cd "$ROOT"
 mkdir -p logs "$STORAGE_PATH/generated_modules"
-source /tools/module_env.sh
-module load cluster-tools/v1.0 || true
-module load slurm-tools/v1.0 || true
-module load cuda-cudnn/12.4-9.1.1
-source "$ROOT/.venv/bin/activate"
+source "$ROOT/scripts/activate_cluster_env.sh"
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 

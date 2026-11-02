@@ -138,13 +138,13 @@ def _compute_single_score(args: Tuple[str, str]) -> Dict[str, Any]:
         _log_sample_result(error_msg="CANNOT EXTRACT CODE")
         return result
 
-    gpu_ip = os.environ.get("TRITON_SERVER_IP", os.environ.get("CUDA_SERVER_IP", "10.200.240.10"))
+    keck_base_url = os.environ.get("KECK_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
     endpoint = os.environ.get("TRITON_EVAL_ENDPOINT", "/compute_score")
     timeout = float(os.environ.get("TRITON_EVAL_TIMEOUT", os.environ.get("CUDA_EVAL_TIMEOUT", "300")))
 
     try:
         response = requests.post(
-            url=f"http://{gpu_ip}:8000{endpoint}",
+            url=f"{keck_base_url}{endpoint}",
             data=_build_eval_payload(triton_code, ground_truth),
             proxies={"http": None, "https": None},
             timeout=timeout,
@@ -306,10 +306,7 @@ _INFRA_MARKERS = (
 def _require_keck_healthy():
     base_url = _ff_os.environ.get("KECK_BASE_URL", "").rstrip("/")
     if not base_url:
-        host = _ff_os.environ.get("TRITON_SERVER_IP", "")
-        if not host:
-            raise RuntimeError("KECK_BASE_URL and TRITON_SERVER_IP are unset")
-        base_url = f"http://{host}:8000"
+        base_url = "http://127.0.0.1:8000"
 
     health_url = f"{base_url}/healthz"
     last_error = None

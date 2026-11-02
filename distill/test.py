@@ -2,8 +2,8 @@ from openai import OpenAI
 import os
 
 client = OpenAI(
-    api_key="token-abc123",
-    base_url=os.getenv("OPENAI_API_URL", "http://10.200.108.4:8000/v1"),
+    api_key=os.getenv("OPENAI_API_KEY", "EMPTY"),
+    base_url=os.getenv("OPENAI_API_URL", "http://127.0.0.1:8000/v1"),
 )
 
 chat_completion = client.chat.completions.create(

@@ -7,10 +7,23 @@ source .venv/bin/activate
 mkdir -p logs checkpoints
 ```
 
+Configure site-specific modules once:
+
+```bash
+export MODULE_INIT_SCRIPT=/path/to/modules-init.sh
+export CUDA_MODULE=cuda/12.4
+export VENV_PATH="$PWD/.venv"
+```
+
+Pass `--partition`, `--account`, and `--qos` to each `sbatch` command according
+to the local Slurm configuration.
+
 ## Start Keck
 
 ```bash
-sbatch --export=ALL,PORT=8000 keck/slurms/serve_keck.slurm
+sbatch --partition=<gpu-partition> \
+  --export=ALL,PORT=8000 \
+  keck/slurms/serve_keck.slurm
 ```
 
 Wait for the job to start, then verify:
@@ -22,7 +35,7 @@ curl http://<keck-node>:8000/healthz
 ## Start the Coder service
 
 ```bash
-sbatch \
+sbatch --partition=<gpu-partition> \
   --export=ALL,MODEL_PATH=<merged-coder-checkpoint>,PORT=18080 \
   slurms/services/serve_coder_vllm.slurm
 ```
@@ -30,7 +43,7 @@ sbatch \
 ## Train the Coder
 
 ```bash
-sbatch --export=ALL,\
+sbatch --partition=<gpu-partition> --export=ALL,\
 EXP=<experiment>,\
 MODEL=<base-model>,\
 TRAIN_DATA=<modules.json>,\
@@ -44,7 +57,7 @@ fail-fast Triton reward used by the current experiments.
 ## Train the Proposer
 
 ```bash
-sbatch --export=ALL,\
+sbatch --partition=<gpu-partition> --export=ALL,\
 EXP=<experiment>,\
 PROPOSER_MODEL=<sft-model>,\
 TRAIN_DATA=<proposer-inputs.json>,\
@@ -54,7 +67,8 @@ slurms/proposer/train_frontier_grpo.slurm
 ```
 
 To resume, add `LOAD_CHECKPOINT=<complete-global-step-directory>`. Checkpoints
-and framework caches default to `/nfs_global` under the repository.
+and framework caches default to repository-local ignored directories. Set
+`SAVE_DIR` and `CACHE_ROOT` to mounted high-capacity storage for production runs.
 
-Never resume from a directory that lacks all actor model, optimizer,
-extra-state, Hugging Face export, and dataloader files.
+A resumable directory contains actor model shards, optimizer shards,
+extra state, a Hugging Face export, and dataloader state.

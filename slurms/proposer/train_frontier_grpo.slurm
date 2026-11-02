@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH -J kz-proposer-api-exec-80
-#SBATCH -p r8nv-gpu-hw-80g
-#SBATCH --qos=gpu-normal
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
 #SBATCH --gres-flags=enforce-binding
@@ -10,7 +8,6 @@
 #SBATCH -t 1-06:00:00
 #SBATCH -o logs/kz-proposer-api-exec-80-%j.out
 #SBATCH -e logs/kz-proposer-api-exec-80-%j.err
-#SBATCH --exclude=r8a100-d00,r8a100-d05
 
 set -euo pipefail
 
@@ -28,7 +25,6 @@ cd "$ROOT"
 mkdir -p logs "$SAVE_DIR"
 export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 
-# /share/personal may be full; keep all framework caches on /nfs_global.
 CACHE_ROOT="${CACHE_ROOT:-$ROOT/.cache/proposer_rl}"
 export HF_HOME="$CACHE_ROOT/huggingface"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
@@ -37,11 +33,7 @@ export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
 export TORCH_HOME="$CACHE_ROOT/torch"
 mkdir -p "$HF_DATASETS_CACHE" "$TRANSFORMERS_CACHE" "$XDG_CACHE_HOME" "$TORCH_HOME"
 
-source /tools/module_env.sh
-module load cluster-tools/v1.0 || true
-module load slurm-tools/v1.0 || true
-module load cuda-cudnn/12.4-9.1.1
-source "$ROOT/.venv/bin/activate"
+source "$ROOT/scripts/activate_cluster_env.sh"
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 export CODER_VLLM_URL KECK_BASE_URL

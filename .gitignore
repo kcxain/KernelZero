@@ -151,6 +151,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -158,6 +160,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.secrets/
+credentials*.json
+*.pem
+*.key
 
 # Spyder project settings
 .spyderproject

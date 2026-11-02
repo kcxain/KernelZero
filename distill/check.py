@@ -6,13 +6,11 @@ from typing import Dict
 def compute_score_remote(problem: Dict, completion: str):
     import requests
 
-    gpu_ip = os.environ.get("CUDA_SERVER_IP", "10.200.240.10")
-    gpu_port = os.environ.get("CUDA_SERVER_PORT", "8000")
+    keck_base_url = os.environ.get("KECK_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
     solution_str = completion
     ground_truth = problem["ground_truth"]["pytorch_module"]
-    # curl -X POST http://10.200.198.14:8000/compute_score   -F "code=123"   -F "timeout_sec=60"   -F "nvcc_flags=-O2 -arch=sm_80"
     response = requests.post(
-        url=f"http://{gpu_ip}:{gpu_port}/compute_score",
+        url=f"{keck_base_url}/compute_score",
         data={
             "cuda_code": solution_str,
             "torch_code": ground_truth,
